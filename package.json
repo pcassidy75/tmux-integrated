@@ -1,0 +1,72 @@
+{
+  "name": "vscode-tmux",
+  "displayName": "vscode-tmux",
+  "description": "Seamless tmux integration for VS Code terminals — persistent sessions, code-command support, and Copilot compatibility",
+  "version": "0.1.0",
+  "publisher": "vscode-tmux",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "tmux",
+    "terminal",
+    "persistent",
+    "session"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "terminal": {
+      "profiles": [
+        {
+          "id": "vscode-tmux.terminal",
+          "title": "tmux"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "vscode-tmux.newTerminal",
+        "title": "New tmux Terminal",
+        "category": "tmux"
+      },
+      {
+        "command": "vscode-tmux.attachWindow",
+        "title": "Attach to tmux Window",
+        "category": "tmux"
+      }
+    ],
+    "configuration": {
+      "title": "vscode-tmux",
+      "properties": {
+        "vscode-tmux.sessionName": {
+          "type": "string",
+          "default": "",
+          "description": "Override the tmux session name. Defaults to the workspace folder name."
+        },
+        "vscode-tmux.shell": {
+          "type": "string",
+          "default": "",
+          "description": "Shell to use inside tmux panes. Defaults to $SHELL or /bin/bash."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts"
+  },
+  "devDependencies": {
+    "@types/node": "^18.x",
+    "@types/vscode": "^1.80.0",
+    "typescript": "^5.1.0"
+  }
+}
