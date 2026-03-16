@@ -46,6 +46,31 @@ reconnect you can open a new terminal and continue where you left off.
 - tmux ≥ 2.0 (control mode was introduced in 2.0; 3.x recommended)
 - Linux or macOS
 
+## Local testing in VS Code
+
+If you want to test the extension locally without publishing it, use VS Code's
+Extension Development Host.
+
+1. In this repo, run `npm install` once if dependencies are not already installed.
+2. Press `F5` in VS Code.
+3. Choose **Run tmux-integrated**.
+4. A second VS Code window opens. This is the test window.
+5. In the test window, open the command palette and run **tmux: New tmux Terminal**.
+6. If prompted by macOS, allow terminal-related permissions for VS Code and tmux.
+
+If you plan to make code changes while testing, choose **Run tmux-integrated (watch)**
+instead. That keeps TypeScript compiling in the background.
+
+### Quick sanity checks
+
+In the test window, verify these in order:
+
+1. The status bar shows the active tmux session name.
+2. Running `pwd` works in the tmux-backed terminal.
+3. Close the terminal tab, then run **tmux: Attach to tmux Window** and reopen it.
+4. Start a long-running command like `sleep 30`, close the tab, reattach, and confirm it is still running.
+5. Run `code README.md` inside the tmux terminal and confirm VS Code opens the file.
+
 ## Usage
 
 1. Install the extension.
@@ -66,10 +91,10 @@ reconnect you can open a new terminal and continue where you left off.
 
 ### Reconnect after a disconnect
 
-All your processes are still running inside tmux.  Just open a new terminal
-via **tmux: New tmux Terminal** — it will attach to the same session and you
-can continue from there.  A future release will add direct re-attachment to
-existing windows (including their scrollback).
+All your processes are still running inside tmux. Use **tmux: Attach to tmux
+Window** to reopen an existing tmux window in VS Code; the extension restores
+the current visible pane contents and resumes live output. **tmux: New tmux
+Terminal** still creates a fresh tmux window in the same session.
 
 ## Extension settings
 
@@ -88,15 +113,20 @@ existing windows (including their scrollback).
 ## How it works
 
 The extension spawns `tmux -CC new-session -A -s <session>` as a child
-process.  In control mode tmux outputs structured protocol messages instead of
-rendering a TUI.  The extension parses `%output %<pane> <data>` notifications
-and forwards the raw bytes to the VS Code terminal renderer (xterm.js), which
-handles all ANSI/VT100/OSC sequences — including VS Code's own shell
-integration sequences (OSC 633) that Copilot relies on.
+process. In control mode tmux outputs structured protocol messages instead of
+rendering a TUI. The extension parses `%output` and `%extended-output`
+notifications, decodes tmux's octal-escaped byte stream, and forwards the
+result to the VS Code terminal renderer (xterm.js), which handles
+ANSI/VT100/OSC sequences — including VS Code's own shell integration sequences
+(OSC 633) that Copilot relies on.
 
 User keystrokes from the VS Code terminal are written directly to the tmux
 pane's PTY slave device, bypassing the `send-keys` encoding layer for maximum
 fidelity.
+
+Window sizing is synchronized with tmux control mode using `refresh-client -C`
+for the tmux window shown in each VS Code terminal, rather than mutating pane
+layout with `resize-pane`.
 
 ## Differences from existing solutions
 

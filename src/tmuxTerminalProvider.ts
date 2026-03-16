@@ -3,15 +3,14 @@
  *
  * Lifecycle:
  *   open()        → creates a new tmux window; subscribes to %output events.
- *   handleInput() → forwards raw key data straight to the pane's pty device
- *                   (falling back to `send-keys` if direct write fails).
- *   setDimensions() → resizes the tmux pane to match VS Code's terminal size.
+*   handleInput() → forwards key data through tmux control commands.
+ *   setDimensions() → updates the control client window size for the tmux
+ *                     window shown in this VS Code terminal.
  *   close()       → unsubscribes from output; intentionally does NOT kill the
  *                   tmux window so the process persists across reconnects.
  */
 
 import * as vscode from 'vscode';
-import * as fs from 'fs';
 import { TmuxControlClient, TmuxPaneOutput } from './tmuxControlClient';
 
 /** Map of raw terminal escape sequences to tmux key names. */
@@ -56,8 +55,8 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
 
     private paneId: string | null = null;
     private windowId: string | null = null;
-    /** File descriptor for direct writes to the pane's pty slave. */
-    private ttyFd: number | null = null;
+    private readonly existingWindow: { windowId: string; paneId: string } | null;
+    private readonly closeWindowOnOpen: string | undefined;
     private outputListener: ((ev: TmuxPaneOutput) => void) | null = null;
     private windowCloseListener: ((id: string) => void) | null = null;
 
@@ -66,7 +65,12 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
         private readonly startDirectory: string | undefined,
         private readonly extraEnv: Record<string, string>,
         private readonly shell: string | undefined,
-    ) {}
+        existingWindow?: { windowId: string; paneId: string },
+        closeWindowOnOpen?: string,
+    ) {
+        this.existingWindow = existingWindow ?? null;
+        this.closeWindowOnOpen = closeWindowOnOpen;
+    }
 
     // -----------------------------------------------------------------------
     // Pseudoterminal interface
@@ -74,27 +78,22 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
 
     async open(initialDimensions: vscode.TerminalDimensions | undefined): Promise<void> {
         try {
-            const { windowId, paneId } = await this.client.newWindow({
+            const targetWindow = this.existingWindow ?? await this.client.newWindow({
                 startDirectory: this.startDirectory,
                 cols: initialDimensions?.columns,
                 rows: initialDimensions?.rows,
                 env: this.extraEnv,
                 shell: this.shell,
             });
+            const { windowId, paneId } = targetWindow;
             this.windowId = windowId;
             this.paneId = paneId;
 
-            // Try to open the pane's pty for direct input writes.
-            const ttyPath = await this.client.getPaneTty(paneId);
-            if (ttyPath) {
-                try {
-                    this.ttyFd = fs.openSync(
-                        ttyPath,
-                        fs.constants.O_WRONLY | fs.constants.O_NOCTTY,
-                    );
-                } catch {
-                    // Non-fatal — fall back to send-keys.
-                }
+            if (initialDimensions && this.windowId) {
+                await this.client.resizeWindowForClient(
+                    initialDimensions.columns,
+                    initialDimensions.rows,
+                );
             }
 
             // Forward pane output to the VS Code terminal renderer.
@@ -115,6 +114,24 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
             };
             this.client.on('window-close', this.windowCloseListener);
 
+            if (this.closeWindowOnOpen && this.closeWindowOnOpen !== windowId) {
+                await this.client.killWindow(this.closeWindowOnOpen).catch((err) => {
+                    console.error(`tmux-integrated: bootstrap window cleanup failed: ${err}`);
+                });
+            }
+
+            if (this.existingWindow) {
+                // Seed the renderer with the current visible pane contents.
+                const snapshot = await this.client.capturePane(paneId, {
+                    includeEscapeSequences: true,
+                });
+                const cursor = await this.client.getPaneCursor(paneId);
+                if (snapshot) {
+                    this.writeEmitter.fire(snapshot);
+                }
+                this.writeEmitter.fire(`\x1b[${cursor.y + 1};${cursor.x + 1}H`);
+            }
+
         } catch (err) {
             this.writeEmitter.fire(`\r\ntmux-integrated: error creating tmux window: ${err}\r\n`);
             this.closeEmitter.fire(1);
@@ -124,26 +141,13 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
     handleInput(data: string): void {
         if (!this.paneId) { return; }
 
-        if (this.ttyFd !== null) {
-            try {
-                // Write raw bytes directly to the pane's pty — this handles
-                // all input types correctly without any encoding gymnastics.
-                fs.writeSync(this.ttyFd, Buffer.from(data, 'binary'));
-                return;
-            } catch {
-                // pty may have closed; fall back to send-keys.
-                try { fs.closeSync(this.ttyFd); } catch { /* ignore */ }
-                this.ttyFd = null;
-            }
-        }
-
         this.sendKeysInput(data);
     }
 
     setDimensions(dimensions: vscode.TerminalDimensions): void {
-        if (this.paneId) {
+        if (this.windowId) {
             this.client
-                .resizePane(this.paneId, dimensions.columns, dimensions.rows)
+                .resizeWindowForClient(dimensions.columns, dimensions.rows)
                 .catch((err) => console.error(`tmux-integrated: resize error: ${err}`));
         }
     }
@@ -158,9 +162,8 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
     // -----------------------------------------------------------------------
 
     /**
-     * Fall-back input path when the pty fd is unavailable.
-     * Maps known escape sequences to tmux key names; sends everything else
-     * with `send-keys -l` (literal mode, no key-name interpretation).
+     * Maps known escape sequences to tmux key names and sends any remaining
+     * literal text with `send-keys -l`.
      */
     private sendKeysInput(data: string): void {
         if (!this.paneId) { return; }
@@ -171,21 +174,48 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
                 .sendCommand(cmd)
                 .catch((err) => console.error(`tmux-integrated: send-keys error: ${err}`));
 
-        if (KEY_MAP[data]) {
-            send(`send-keys -t ${paneId} "${KEY_MAP[data]}"`);
-            return;
-        }
+        const knownSequences = Object.keys(KEY_MAP).sort((left, right) => right.length - left.length);
+        let index = 0;
 
-        if (data.length === 1 && data.charCodeAt(0) < 0x20) {
-            // Ctrl+A … Ctrl+Z
-            const letter = String.fromCharCode(data.charCodeAt(0) + 64).toLowerCase();
-            send(`send-keys -t ${paneId} "C-${letter}"`);
-            return;
-        }
+        while (index < data.length) {
+            const sequence = knownSequences.find((candidate) => data.startsWith(candidate, index));
+            if (sequence) {
+                send(`send-keys -t ${paneId} "${KEY_MAP[sequence]}"`);
+                index += sequence.length;
+                continue;
+            }
 
-        // Literal text — escape backslash and double-quote for the tmux command.
-        const escaped = data.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-        send(`send-keys -t ${paneId} -l "${escaped}"`);
+            const char = data[index];
+            if (char === '\n') {
+                send(`send-keys -t ${paneId} "Enter"`);
+                index += 1;
+                continue;
+            }
+
+            if (char.charCodeAt(0) < 0x20) {
+                const letter = String.fromCharCode(char.charCodeAt(0) + 64).toLowerCase();
+                send(`send-keys -t ${paneId} "C-${letter}"`);
+                index += 1;
+                continue;
+            }
+
+            let literalEnd = index + 1;
+            while (literalEnd < data.length) {
+                const nextChar = data[literalEnd];
+                if (nextChar === '\n' || nextChar.charCodeAt(0) < 0x20) {
+                    break;
+                }
+                if (knownSequences.some((candidate) => data.startsWith(candidate, literalEnd))) {
+                    break;
+                }
+                literalEnd += 1;
+            }
+
+            const literal = data.slice(index, literalEnd);
+            const escaped = literal.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+            send(`send-keys -t ${paneId} -l "${escaped}"`);
+            index = literalEnd;
+        }
     }
 
     private cleanup(): void {
@@ -196,10 +226,6 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
         if (this.windowCloseListener) {
             this.client.removeListener('window-close', this.windowCloseListener);
             this.windowCloseListener = null;
-        }
-        if (this.ttyFd !== null) {
-            try { fs.closeSync(this.ttyFd); } catch { /* ignore */ }
-            this.ttyFd = null;
         }
     }
 }

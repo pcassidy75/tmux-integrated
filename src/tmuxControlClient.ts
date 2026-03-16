@@ -1,7 +1,7 @@
 /**
  * TmuxControlClient
  *
- * Connects to a tmux server using control mode (`tmux -CC`).  In control mode
+ * Connects to a tmux server using control mode (`tmux -C`).  In control mode
  * tmux does not render any UI to the terminal; instead it sends structured
  * protocol messages on stdout and accepts commands on stdin.  This lets the
  * extension own the visual layer (VS Code terminals) while tmux provides
@@ -19,12 +19,13 @@
  *       [optional response lines]
  *       %end <time> <num> 0   |   %error <time> <num> 0
  *
- * In %output lines newlines inside the data are encoded as the two-char
- * sequence \n, and literal backslashes as \\.
+ * In control mode, pane output is escaped inline. tmux encodes non-printable
+ * bytes and literal backslashes as octal sequences such as \033.
  */
 
 import { EventEmitter } from 'events';
-import { ChildProcess, spawn } from 'child_process';
+import { ChildProcessWithoutNullStreams, spawn } from 'child_process';
+import { StringDecoder } from 'string_decoder';
 
 export interface TmuxPaneOutput {
     paneId: string;
@@ -38,28 +39,49 @@ export interface TmuxWindow {
     active: boolean;
 }
 
+export interface TmuxLayoutChange {
+    windowId: string;
+    layout: string;
+    visibleLayout: string;
+    flags: string;
+}
+
+export interface TmuxWindowPaneChange {
+    windowId: string;
+    paneId: string;
+}
+
+export interface TmuxPaneCursor {
+    x: number;
+    y: number;
+}
+
 interface PendingCommand {
     resolve: (lines: string[]) => void;
     reject: (err: Error) => void;
 }
 
 export class TmuxControlClient extends EventEmitter {
-    private proc: ChildProcess | null = null;
+    private proc: ChildProcessWithoutNullStreams | null = null;
     private readBuffer = '';
     private responseBuffer: string[] = [];
     private inBlock = false;
     private pendingQueue: PendingCommand[] = [];
     private _connected = false;
+    private readonly paneDecoders = new Map<string, StringDecoder>();
 
-    constructor(private readonly sessionName: string) {
+    constructor(
+        private readonly sessionName: string,
+        private readonly tmuxBinaryPath: string,
+    ) {
         super();
     }
 
-    /** Spawn `tmux -CC new-session -A -s <name>` and wait for the first %end. */
+    /** Spawn `tmux -C new-session -A -s <name>` and wait for the first %end. */
     connect(): Promise<void> {
         return new Promise((resolve, reject) => {
-            const args = [
-                '-CC',          // control mode
+            const tmuxArgs = [
+                '-C',           // control mode
                 'new-session',
                 '-A',           // attach to existing session if it exists
                 '-s', this.sessionName,
@@ -67,20 +89,20 @@ export class TmuxControlClient extends EventEmitter {
                 '-y', '50',     // initial height
             ];
 
-            this.proc = spawn('tmux', args, {
+            this.proc = spawn(this.tmuxBinaryPath, tmuxArgs, {
+                cwd: process.cwd(),
                 env: { ...process.env },
                 stdio: ['pipe', 'pipe', 'pipe'],
             });
 
-            this.proc.stdout!.on('data', (chunk: Buffer) => {
-                this.ingest(chunk.toString('binary'));
+            this.proc.stdout.on('data', (chunk: Buffer) => {
+                this.ingest(chunk.toString('latin1'));
             });
 
-            // Some tmux builds write the initial block to stderr.
-            this.proc.stderr!.on('data', (chunk: Buffer) => {
-                const s = chunk.toString('binary');
-                if (s.includes('%begin') || s.includes('%end') || s.includes('%output')) {
-                    this.ingest(s);
+            this.proc.stderr.on('data', (chunk: Buffer) => {
+                const data = chunk.toString('latin1');
+                if (data.includes('%begin') || data.includes('%end') || data.includes('%output')) {
+                    this.ingest(data);
                 }
             });
 
@@ -88,29 +110,57 @@ export class TmuxControlClient extends EventEmitter {
                 reject(new Error(`tmux spawn error: ${err.message}`));
             });
 
-            this.proc.on('exit', (code, signal) => {
+            this.proc.on('exit', (exitCode, signal) => {
                 this._connected = false;
-                this.emit('tmux-exit', code, signal);
+                this.emit('tmux-exit', exitCode, signal);
                 for (const cmd of this.pendingQueue) {
                     cmd.reject(new Error('tmux process exited'));
                 }
                 this.pendingQueue = [];
+                this.proc = null;
             });
 
             const onReady = () => {
                 this._connected = true;
                 resolve();
             };
+            const onReadyError = (err: Error) => {
+                this.removeListener('_ready', onReady);
+                reject(err);
+            };
+
             this.once('_ready', onReady);
+            this.once('_ready-error', onReadyError);
+
+            setTimeout(() => {
+                if (!this.proc) {
+                    this.emit('_ready-error', new Error('tmux process exited before handshake'));
+                    return;
+                }
+                this.sendCommand('display-message -p "__tmux_integrated_ready__"')
+                    .then((lines) => {
+                        if (lines[0]?.trim() === '__tmux_integrated_ready__') {
+                            this.emit('_ready');
+                            return;
+                        }
+                        this.emit('_ready-error', new Error('Unexpected tmux readiness response'));
+                    })
+                    .catch((err) => {
+                        this.emit('_ready-error', err instanceof Error ? err : new Error(String(err)));
+                    });
+            }, 50);
 
             const timer = setTimeout(() => {
                 this.removeListener('_ready', onReady);
+                this.removeListener('_ready-error', onReadyError);
                 if (!this._connected) {
                     reject(new Error('Timed out waiting for tmux control mode handshake'));
                 }
             }, 10_000);
 
-            this.once('_ready', () => clearTimeout(timer));
+            const clearReadyTimer = () => clearTimeout(timer);
+            this.once('_ready', clearReadyTimer);
+            this.once('_ready-error', clearReadyTimer);
         });
     }
 
@@ -120,15 +170,13 @@ export class TmuxControlClient extends EventEmitter {
 
     private ingest(raw: string): void {
         this.readBuffer += raw;
-        // Process all complete lines, keep the last incomplete fragment.
-        const lastNL = this.readBuffer.lastIndexOf('\n');
-        if (lastNL === -1) { return; }
 
-        const complete = this.readBuffer.slice(0, lastNL);
-        this.readBuffer = this.readBuffer.slice(lastNL + 1);
-
-        for (const line of complete.split('\n')) {
+        let lineEnd = this.readBuffer.indexOf('\n');
+        while (lineEnd !== -1) {
+            const line = this.readBuffer.slice(0, lineEnd).replace(/\r$/u, '');
+            this.readBuffer = this.readBuffer.slice(lineEnd + 1);
             this.parseLine(line);
+            lineEnd = this.readBuffer.indexOf('\n');
         }
     }
 
@@ -160,6 +208,11 @@ export class TmuxControlClient extends EventEmitter {
                 cmd.reject(new Error(this.responseBuffer.join('\n') || line));
             }
             this.responseBuffer = [];
+        } else if (this.inBlock && line.startsWith('%')) {
+            // tmux may emit asynchronous notifications while a command block
+            // is in flight. These must still be processed as notifications
+            // rather than being swallowed as command response text.
+            this.parseNotification(line);
         } else if (this.inBlock) {
             this.responseBuffer.push(line);
         } else {
@@ -169,24 +222,66 @@ export class TmuxControlClient extends EventEmitter {
 
     private parseNotification(line: string): void {
         if (line.startsWith('%output ')) {
-            // "%output %<id> <escaped-data>"
-            const rest = line.slice('%output '.length);
-            const sp = rest.indexOf(' ');
-            if (sp !== -1) {
-                const paneId = rest.slice(0, sp);
-                const encoded = rest.slice(sp + 1);
-                const data = decodeOutput(encoded);
-                this.emit('output', { paneId, data } as TmuxPaneOutput);
-            }
+            this.parseOutput(line);
+        } else if (line.startsWith('%extended-output ')) {
+            this.parseExtendedOutput(line);
         } else if (line.startsWith('%window-add ')) {
             this.emit('window-add', line.slice('%window-add '.length).trim());
         } else if (line.startsWith('%window-close ')) {
             this.emit('window-close', line.slice('%window-close '.length).trim());
+        } else if (line.startsWith('%window-renamed ')) {
+            this.emit('window-renamed', parseWindowRenamed(line));
+        } else if (line.startsWith('%layout-change ')) {
+            const layoutChange = parseLayoutChange(line);
+            if (layoutChange) {
+                this.emit('layout-change', layoutChange);
+            }
+        } else if (line.startsWith('%window-pane-changed ')) {
+            const paneChange = parseWindowPaneChange(line);
+            if (paneChange) {
+                this.emit('window-pane-changed', paneChange);
+            }
+        } else if (line.startsWith('%session-window-changed ')) {
+            this.emit('session-window-changed', parseSessionWindowChanged(line));
+        } else if (line.startsWith('%session-renamed ')) {
+            this.emit('session-renamed', line.slice('%session-renamed '.length));
+        } else if (line.startsWith('%sessions-changed')) {
+            this.emit('sessions-changed');
+        } else if (line.startsWith('%pane-mode-changed ')) {
+            this.emit('pane-mode-changed', line.slice('%pane-mode-changed '.length).trim());
+        } else if (line.startsWith('%pause ')) {
+            this.emit('pause', line.slice('%pause '.length).trim());
+        } else if (line.startsWith('%continue ')) {
+            this.emit('continue', line.slice('%continue '.length).trim());
+        } else if (line.startsWith('%message ')) {
+            this.emit('message', line.slice('%message '.length));
         } else if (line.startsWith('%exit')) {
             this.emit('tmux-exit');
         }
-        // Other notifications (%sessions-changed, %layout-change, etc.) are
-        // intentionally ignored for now.
+    }
+
+    private parseOutput(line: string): void {
+        const rest = line.slice('%output '.length);
+        const sp = rest.indexOf(' ');
+        if (sp === -1) {
+            return;
+        }
+
+        const paneId = rest.slice(0, sp);
+        const encoded = rest.slice(sp + 1);
+        const data = this.decodePaneOutput(paneId, encoded);
+        this.emit('output', { paneId, data } as TmuxPaneOutput);
+    }
+
+    private parseExtendedOutput(line: string): void {
+        const match = /^%extended-output\s+(%\S+)\s+(\d+)\s+(?:.*?\s+)?:\s?(.*)$/u.exec(line);
+        if (!match) {
+            return;
+        }
+
+        const [, paneId, , encoded] = match;
+        const data = this.decodePaneOutput(paneId, encoded);
+        this.emit('output', { paneId, data } as TmuxPaneOutput);
     }
 
     // -----------------------------------------------------------------------
@@ -196,7 +291,7 @@ export class TmuxControlClient extends EventEmitter {
     /** Send a single-line tmux command and return the response lines. */
     sendCommand(command: string): Promise<string[]> {
         return new Promise((resolve, reject) => {
-            if (!this.proc?.stdin?.writable) {
+            if (!this.proc) {
                 reject(new Error('Not connected to tmux'));
                 return;
             }
@@ -249,6 +344,10 @@ export class TmuxControlClient extends EventEmitter {
         await this.sendCommand(`resize-pane -t ${paneId} -x ${cols} -y ${rows}`);
     }
 
+    async resizeWindowForClient(cols: number, rows: number): Promise<void> {
+        await this.sendCommand(`refresh-client -C ${cols}x${rows}`);
+    }
+
     async killWindow(windowId: string): Promise<void> {
         await this.sendCommand(`kill-window -t ${windowId}`);
     }
@@ -265,6 +364,64 @@ export class TmuxControlClient extends EventEmitter {
             });
     }
 
+    async respawnPane(paneId: string, options: {
+        startDirectory?: string;
+        shell?: string;
+        env?: Record<string, string>;
+    } = {}): Promise<void> {
+        let cmd = `respawn-pane -k -t ${paneId}`;
+
+        if (options.startDirectory) {
+            cmd += ` -c ${shellescape(options.startDirectory)}`;
+        }
+        if (options.env) {
+            for (const [key, value] of Object.entries(options.env)) {
+                cmd += ` -e ${shellescape(`${key}=${value}`)}`;
+            }
+        }
+        if (options.shell) {
+            cmd += ` ${shellescape(options.shell)}`;
+        }
+
+        await this.sendCommand(cmd);
+    }
+
+    async capturePane(paneId: string, options: {
+        includeEscapeSequences?: boolean;
+        includePendingOnly?: boolean;
+        alternateScreen?: boolean;
+        startLine?: number | '-';
+    } = {}): Promise<string> {
+        let cmd = `capture-pane -p -t ${paneId}`;
+
+        if (options.includeEscapeSequences) {
+            cmd += ' -e';
+        }
+        if (options.includePendingOnly) {
+            cmd += ' -P';
+        }
+        if (options.alternateScreen) {
+            cmd += ' -a';
+        }
+        if (options.startLine !== undefined) {
+            cmd += ` -S ${options.startLine}`;
+        }
+
+        const res = await this.sendCommand(cmd);
+        return res.join('\n');
+    }
+
+    async getPaneCursor(paneId: string): Promise<TmuxPaneCursor> {
+        const res = await this.sendCommand(
+            `display-message -p -t ${paneId} "#{cursor_x} #{cursor_y}"`,
+        );
+        const [xText, yText] = (res[0] ?? '').trim().split(/\s+/u);
+        return {
+            x: Number.parseInt(xText ?? '0', 10) || 0,
+            y: Number.parseInt(yText ?? '0', 10) || 0,
+        };
+    }
+
     /**
      * Update environment variables in the session so that new windows inherit
      * them (e.g. VSCODE_IPC_HOOK_CLI for the `code` CLI command).
@@ -277,15 +434,26 @@ export class TmuxControlClient extends EventEmitter {
 
     disconnect(): void {
         if (this.proc) {
-            try { this.proc.stdin?.write('detach\n'); } catch { /* ignore */ }
+            try { this.proc.stdin.write('detach\n'); } catch { /* ignore */ }
             this.proc.kill();
             this.proc = null;
         }
         this._connected = false;
+        this.paneDecoders.clear();
     }
 
     isConnected(): boolean {
         return this._connected && this.proc !== null;
+    }
+
+    private decodePaneOutput(paneId: string, encoded: string): string {
+        let decoder = this.paneDecoders.get(paneId);
+        if (!decoder) {
+            decoder = new StringDecoder('utf8');
+            this.paneDecoders.set(paneId, decoder);
+        }
+
+        return decoder.write(decodeOutput(encoded));
     }
 }
 
@@ -293,16 +461,25 @@ export class TmuxControlClient extends EventEmitter {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/**
- * Decode data from a tmux %output notification.
- * tmux escapes \n → \\n and \\ → \\\\ before writing the line.
- * We reverse that here.
- */
-function decodeOutput(encoded: string): string {
-    // Replace \n (2 chars: backslash + n) with a real newline,
-    // and \\ (2 chars: double backslash) with a single backslash.
-    // The regex handles both in a single pass so order is not an issue.
-    return encoded.replace(/\\(n|\\)/g, (_, c: string) => (c === 'n' ? '\n' : '\\'));
+/** Decode data from a tmux %output or %extended-output notification. */
+function decodeOutput(encoded: string): Buffer {
+    const bytes: number[] = [];
+
+    for (let index = 0; index < encoded.length; index++) {
+        const char = encoded[index];
+        if (char === '\\' && index + 3 < encoded.length) {
+            const octal = encoded.slice(index + 1, index + 4);
+            if (/^[0-7]{3}$/u.test(octal)) {
+                bytes.push(parseInt(octal, 8));
+                index += 3;
+                continue;
+            }
+        }
+
+        bytes.push(char.charCodeAt(0));
+    }
+
+    return Buffer.from(bytes);
 }
 
 /**
@@ -311,4 +488,44 @@ function decodeOutput(encoded: string): string {
  */
 function shellescape(value: string): string {
     return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+function parseLayoutChange(line: string): TmuxLayoutChange | null {
+    const match = /^%layout-change\s+(@\S+)\s+(\S+)\s+(\S+)\s*(.*)$/u.exec(line);
+    if (!match) {
+        return null;
+    }
+
+    const [, windowId, layout, visibleLayout, flags] = match;
+    return { windowId, layout, visibleLayout, flags: flags.trim() };
+}
+
+function parseWindowPaneChange(line: string): TmuxWindowPaneChange | null {
+    const match = /^%window-pane-changed\s+(@\S+)\s+(%\S+)$/u.exec(line);
+    if (!match) {
+        return null;
+    }
+
+    const [, windowId, paneId] = match;
+    return { windowId, paneId };
+}
+
+function parseWindowRenamed(line: string): { windowId: string; name: string } | null {
+    const match = /^%window-renamed\s+(@\S+)\s+(.*)$/u.exec(line);
+    if (!match) {
+        return null;
+    }
+
+    const [, windowId, name] = match;
+    return { windowId, name };
+}
+
+function parseSessionWindowChanged(line: string): { sessionId: string; windowId: string } | null {
+    const match = /^%session-window-changed\s+(\$\S+)\s+(@\S+)$/u.exec(line);
+    if (!match) {
+        return null;
+    }
+
+    const [, sessionId, windowId] = match;
+    return { sessionId, windowId };
 }

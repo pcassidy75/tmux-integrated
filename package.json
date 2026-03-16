@@ -17,9 +17,6 @@
     "persistent",
     "session"
   ],
-  "activationEvents": [
-    "onStartupFinished"
-  ],
   "main": "./out/extension.js",
   "contributes": {
     "terminal": {
