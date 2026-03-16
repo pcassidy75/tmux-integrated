@@ -107,3 +107,14 @@ fidelity.
 | Copilot compatible | Partial | Yes |
 | `code` command works | No | Yes |
 | Mouse-mode free | No | Yes |
+
+## License
+
+This project is licensed under the **GNU General Public License v3.0 (GPL-3.0-only)**.
+See [LICENSE](LICENSE) for the full license text.
+
+The GPL was chosen because the control-mode integration approach is closely
+inspired by the technique pioneered by [iTerm2](https://iterm2.com/) (GPL-2.0+)
+and tmux itself is released under the ISC / BSD license family.  Using GPL-3.0
+ensures derivative work obligations are clear and that the project remains free
+and open for everyone.

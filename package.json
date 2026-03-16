@@ -4,7 +4,7 @@
   "description": "Seamless tmux integration for VS Code terminals — persistent sessions, code-command support, and Copilot compatibility",
   "version": "0.1.0",
   "publisher": "tmux-integrated",
-  "license": "MIT",
+  "license": "GPL-3.0-only",
   "engines": {
     "vscode": "^1.80.0"
   },
