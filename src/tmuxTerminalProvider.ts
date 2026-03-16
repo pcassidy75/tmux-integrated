@@ -116,7 +116,7 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
             this.client.on('window-close', this.windowCloseListener);
 
         } catch (err) {
-            this.writeEmitter.fire(`\r\nvscode-tmux: error creating tmux window: ${err}\r\n`);
+            this.writeEmitter.fire(`\r\ntmux-integrated: error creating tmux window: ${err}\r\n`);
             this.closeEmitter.fire(1);
         }
     }
@@ -144,7 +144,7 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
         if (this.paneId) {
             this.client
                 .resizePane(this.paneId, dimensions.columns, dimensions.rows)
-                .catch((err) => console.error(`vscode-tmux: resize error: ${err}`));
+                .catch((err) => console.error(`tmux-integrated: resize error: ${err}`));
         }
     }
 
@@ -169,7 +169,7 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
         const send = (cmd: string) =>
             this.client
                 .sendCommand(cmd)
-                .catch((err) => console.error(`vscode-tmux: send-keys error: ${err}`));
+                .catch((err) => console.error(`tmux-integrated: send-keys error: ${err}`));
 
         if (KEY_MAP[data]) {
             send(`send-keys -t ${paneId} "${KEY_MAP[data]}"`);
