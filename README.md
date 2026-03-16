@@ -1,4 +1,4 @@
-# vscode-tmux
+# tmux-integrated
 
 Seamless [tmux](https://github.com/tmux/tmux) integration for VS Code terminals.
 
@@ -14,12 +14,12 @@ VS Code terminal breaks:
 | Run `tmux` directly in the terminal | `code <file>` no longer opens files in VS Code |
 | tmux mouse mode | Interferes with VS Code's own mouse handling |
 
-**vscode-tmux** solves all three by using tmux's **control mode** (`-CC`),
+**tmux-integrated** solves all three by using tmux's **control mode** (`-CC`),
 exactly as iTerm2 does.  tmux runs in the background as a session manager;
 VS Code owns the visual layer.
 
 ```
-VS Code terminal tab  ←→  vscode-tmux extension  ←→  tmux -CC  ←→  your shell
+VS Code terminal tab  ←→  tmux-integrated extension  ←→  tmux -CC  ←→  your shell
 ```
 
 Each VS Code terminal tab corresponds to one tmux window.  Closing the tab
@@ -75,8 +75,8 @@ existing windows (including their scrollback).
 
 | Setting | Default | Description |
 |---|---|---|
-| `vscode-tmux.sessionName` | *(workspace folder name)* | Override the tmux session name |
-| `vscode-tmux.shell` | `$SHELL` or `/bin/bash` | Shell to run inside each tmux pane |
+| `tmux-integrated.sessionName` | *(workspace folder name)* | Override the tmux session name |
+| `tmux-integrated.shell` | `$SHELL` or `/bin/bash` | Shell to run inside each tmux pane |
 
 ## Commands
 
@@ -100,7 +100,7 @@ fidelity.
 
 ## Differences from existing solutions
 
-| | [wenbo.io approach](https://www.wenbo.io/en-US/Tools/Persistent-VSCode-Remote-Terminals) | **vscode-tmux** |
+| | [wenbo.io approach](https://www.wenbo.io/en-US/Tools/Persistent-VSCode-Remote-Terminals) | **tmux-integrated** |
 |---|---|---|
 | tmux version required | > 3.2 | ≥ 2.0 |
 | Requires custom tmux.conf | Yes | No |

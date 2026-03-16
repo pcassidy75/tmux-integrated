@@ -1,9 +1,9 @@
 {
-  "name": "vscode-tmux",
-  "displayName": "vscode-tmux",
+  "name": "tmux-integrated",
+  "displayName": "tmux-integrated",
   "description": "Seamless tmux integration for VS Code terminals — persistent sessions, code-command support, and Copilot compatibility",
   "version": "0.1.0",
-  "publisher": "vscode-tmux",
+  "publisher": "tmux-integrated",
   "license": "MIT",
   "engines": {
     "vscode": "^1.80.0"
@@ -25,32 +25,32 @@
     "terminal": {
       "profiles": [
         {
-          "id": "vscode-tmux.terminal",
+          "id": "tmux-integrated.terminal",
           "title": "tmux"
         }
       ]
     },
     "commands": [
       {
-        "command": "vscode-tmux.newTerminal",
+        "command": "tmux-integrated.newTerminal",
         "title": "New tmux Terminal",
         "category": "tmux"
       },
       {
-        "command": "vscode-tmux.attachWindow",
+        "command": "tmux-integrated.attachWindow",
         "title": "Attach to tmux Window",
         "category": "tmux"
       }
     ],
     "configuration": {
-      "title": "vscode-tmux",
+      "title": "tmux-integrated",
       "properties": {
-        "vscode-tmux.sessionName": {
+        "tmux-integrated.sessionName": {
           "type": "string",
           "default": "",
           "description": "Override the tmux session name. Defaults to the workspace folder name."
         },
-        "vscode-tmux.shell": {
+        "tmux-integrated.shell": {
           "type": "string",
           "default": "",
           "description": "Shell to use inside tmux panes. Defaults to $SHELL or /bin/bash."
