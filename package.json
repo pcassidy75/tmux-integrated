@@ -5,6 +5,10 @@
   "version": "0.1.0",
   "publisher": "tmux-integrated",
   "license": "GPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/pcassidy75/tmux-integrated"
+  },
   "engines": {
     "vscode": "^1.80.0"
   },
@@ -16,6 +20,12 @@
     "terminal",
     "persistent",
     "session"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "extensionKind": [
+    "workspace"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -64,6 +74,7 @@
   "devDependencies": {
     "@types/node": "^18.x",
     "@types/vscode": "^1.80.0",
+    "@vscode/vsce": "^3.7.1",
     "typescript": "^5.1.0"
   }
 }

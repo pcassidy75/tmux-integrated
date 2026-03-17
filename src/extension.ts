@@ -300,6 +300,8 @@ function resolveTmuxBinaryPath(): string {
         '/opt/homebrew/bin/tmux',
         '/usr/local/bin/tmux',
         '/usr/bin/tmux',
+        '/snap/bin/tmux',
+        '/home/linuxbrew/.linuxbrew/bin/tmux',
     ];
 
     for (const candidate of candidates) {
@@ -328,6 +330,7 @@ function resolvePythonBinaryPath(): string {
         '/opt/homebrew/bin/python3',
         '/usr/local/bin/python3',
         '/usr/bin/python3',
+        '/home/linuxbrew/.linuxbrew/bin/python3',
     ];
 
     for (const candidate of candidates) {
