@@ -129,29 +129,28 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
             };
             this.client.on('output', this.outputListener);
 
-            // Close the VS Code terminal if the tmux window disappears
-            // (e.g. the shell process exited).
+            // When the tmux window disappears (e.g. the shell exited),
+            // leave the VS Code tab open so the session is not torn down.
+            // The user can dismiss the "hung" tab with the trash-can icon.
             this.windowCloseListener = (id: string) => {
                 if (id === this.windowId) {
                     this.windowClosedByTmux = true;
                     this.cleanup();
-                    this.closeEmitter.fire(undefined);
+                    this.writeEmitter.fire('\r\n[Process completed]\r\n');
                 }
             };
             this.client.on('window-close', this.windowCloseListener);
 
-            // Close the VS Code terminal if the entire tmux session exits
-            // (e.g. the last window was closed and tmux shut down).
+            // When the entire tmux session exits, show a notice but keep the
+            // VS Code tab open so the user can see what happened.
             this.tmuxExitListener = () => {
                 this.cleanup();
-                this.closeEmitter.fire(0);
+                this.writeEmitter.fire('\r\n[tmux session ended]\r\n');
             };
             this.client.on('tmux-exit', this.tmuxExitListener);
 
-            // Disable automatic-rename so the tab name stays stable; ensure
-            // remain-on-exit is off so the window closes when the shell exits.
+            // Disable automatic-rename so the tab name stays stable.
             await this.client.sendCommand(`set-option -w -t ${windowId} automatic-rename off`).catch(() => {});
-            await this.client.sendCommand(`set-option -w -t ${windowId} remain-on-exit off`).catch(() => {});
 
             if (initialDimensions && this.windowId) {
                 await this.client.resizeWindowForClient(
@@ -199,16 +198,11 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
     }
 
     close(): void {
-        const windowId = this.windowId;
         this.cleanup();
 
-        // Kill the tmux window unless it already died (shell exit) or
-        // VS Code is shutting down (session persists for re-adoption).
-        if (windowId && !this.windowClosedByTmux && !this.isDeactivating()) {
-            this.client.killWindow(windowId).catch((err) => {
-                console.error(`tmux-integrated: failed to kill window ${windowId}: ${err}`);
-            });
-        }
+        // Never kill the tmux window.  Whether the user clicked the
+        // trash-can icon or VS Code is shutting down, we leave the tmux
+        // window alive so it can be re-adopted on next launch.
     }
 
     // -----------------------------------------------------------------------
