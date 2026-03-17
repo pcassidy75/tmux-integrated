@@ -59,6 +59,7 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
     private readonly closeWindowOnOpen: string | undefined;
     private outputListener: ((ev: TmuxPaneOutput) => void) | null = null;
     private windowCloseListener: ((id: string) => void) | null = null;
+    private tmuxExitListener: (() => void) | null = null;
     private previousChunkEndedWithCarriageReturn = false;
     private pendingCarriageReturnCount = 0;
     private reconcileTimer: ReturnType<typeof setTimeout> | null = null;
@@ -118,6 +119,14 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
                 }
             };
             this.client.on('window-close', this.windowCloseListener);
+
+            // Close the VS Code terminal if the entire tmux session exits
+            // (e.g. the last window was closed and tmux shut down).
+            this.tmuxExitListener = () => {
+                this.cleanup();
+                this.closeEmitter.fire(0);
+            };
+            this.client.on('tmux-exit', this.tmuxExitListener);
 
             if (this.closeWindowOnOpen && this.closeWindowOnOpen !== windowId) {
                 await this.client.killWindow(this.closeWindowOnOpen).catch((err) => {
@@ -328,6 +337,10 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
         if (this.windowCloseListener) {
             this.client.removeListener('window-close', this.windowCloseListener);
             this.windowCloseListener = null;
+        }
+        if (this.tmuxExitListener) {
+            this.client.removeListener('tmux-exit', this.tmuxExitListener);
+            this.tmuxExitListener = null;
         }
         this.pendingCarriageReturnCount = 0;
         this.previousChunkEndedWithCarriageReturn = false;
