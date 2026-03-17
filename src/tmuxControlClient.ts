@@ -70,6 +70,7 @@ export class TmuxControlClient extends EventEmitter {
     private pendingQueue: PendingCommand[] = [];
     private _connected = false;
     private readonly paneDecoders = new Map<string, StringDecoder>();
+    private _version: { major: number; minor: number } | null = null;
 
     constructor(
         private readonly sessionName: string,
@@ -78,6 +79,30 @@ export class TmuxControlClient extends EventEmitter {
         private readonly ptyBridgePath: string,
     ) {
         super();
+    }
+
+    /**
+     * Parse a tmux version string (e.g. "tmux 3.4") and store the result.
+     * Call this after resolving the tmux binary so that version-gated
+     * features (like `new-window -e`) can be checked at runtime.
+     */
+    setVersion(versionString: string): void {
+        const match = /(\d+)\.(\d+)/u.exec(versionString);
+        if (match) {
+            this._version = { major: Number(match[1]), minor: Number(match[2]) };
+        }
+    }
+
+    /** Return the parsed tmux version, or null if not yet resolved. */
+    get version(): { major: number; minor: number } | null {
+        return this._version;
+    }
+
+    /** True when the running tmux is at least the given major.minor. */
+    versionAtLeast(major: number, minor: number): boolean {
+        if (!this._version) { return false; }
+        return this._version.major > major ||
+            (this._version.major === major && this._version.minor >= minor);
     }
 
     /** Spawn tmux -CC through a PTY bridge so tmux sees a real pseudo-terminal. */
@@ -308,7 +333,10 @@ export class TmuxControlClient extends EventEmitter {
                 return;
             }
             this.pendingQueue.push({ resolve, reject });
-            this.proc.stdin.write(command + '\r');
+            // tmux control mode uses LF as the command terminator.  The
+            // previous \r relied on the PTY line-discipline icrnl flag to
+            // translate CR→LF, which is fragile if terminal settings change.
+            this.proc.stdin.write(command + '\n');
         });
     }
 
@@ -329,7 +357,10 @@ export class TmuxControlClient extends EventEmitter {
         if (options.startDirectory) {
             cmd += ` -c ${shellescape(options.startDirectory)}`;
         }
-        if (options.env) {
+        // The -e flag for per-window environment variables requires tmux ≥ 3.0.
+        // On older versions the session-level environment (set via
+        // updateEnvironment) is inherited automatically.
+        if (options.env && this.versionAtLeast(3, 0)) {
             for (const [k, v] of Object.entries(options.env)) {
                 cmd += ` -e ${shellescape(`${k}=${v}`)}`;
             }
@@ -386,7 +417,7 @@ export class TmuxControlClient extends EventEmitter {
         if (options.startDirectory) {
             cmd += ` -c ${shellescape(options.startDirectory)}`;
         }
-        if (options.env) {
+        if (options.env && this.versionAtLeast(3, 0)) {
             for (const [key, value] of Object.entries(options.env)) {
                 cmd += ` -e ${shellescape(`${key}=${value}`)}`;
             }
@@ -440,16 +471,21 @@ export class TmuxControlClient extends EventEmitter {
     /**
      * Update environment variables in the session so that new windows inherit
      * them (e.g. VSCODE_IPC_HOOK_CLI for the `code` CLI command).
+     *
+     * Uses `-t` to scope changes to this session rather than `-g` (global),
+     * which would leak variables into every tmux session on the machine.
      */
     async updateEnvironment(vars: Record<string, string>): Promise<void> {
         for (const [k, v] of Object.entries(vars)) {
-            await this.sendCommand(`set-environment -g ${shellescape(k)} ${shellescape(v)}`);
+            await this.sendCommand(
+                `set-environment -t ${shellescape(this.sessionName)} ${shellescape(k)} ${shellescape(v)}`,
+            );
         }
     }
 
     disconnect(): void {
         if (this.proc) {
-            try { this.proc.stdin.write('detach\r'); } catch { /* ignore */ }
+            try { this.proc.stdin.write('detach\n'); } catch { /* ignore */ }
             this.proc.kill();
             this.proc = null;
         }
@@ -459,6 +495,11 @@ export class TmuxControlClient extends EventEmitter {
 
     isConnected(): boolean {
         return this._connected && this.proc !== null;
+    }
+
+    /** Remove the incremental UTF-8 decoder for a closed pane. */
+    removePaneDecoder(paneId: string): void {
+        this.paneDecoders.delete(paneId);
     }
 
     private decodePaneOutput(paneId: string, encoded: string): string {

@@ -109,7 +109,7 @@ function registerCommands(context: vscode.ExtensionContext): void {
             const connected = await ensureClientConnected();
             if (!connected) { return; }
             const terminal = vscode.window.createTerminal(
-                buildExtensionTerminalOptions(),
+                buildTerminalOptions(),
             );
             terminal.show();
         }),
@@ -158,6 +158,17 @@ async function ensureClientConnected(): Promise<boolean> {
         path.join(extensionRootPath, 'tmux_pty_bridge.py'),
     );
 
+    // Feed the version string so the client can gate features accordingly
+    // (e.g. the -e flag on new-window requires tmux ≥ 3.0).
+    client.setVersion(tmuxVersion!);
+
+    if (!client.versionAtLeast(2, 1)) {
+        setStatus('$(warning) tmux-integrated: unsupported version');
+        vscode.window.showWarningMessage(
+            `tmux-integrated: tmux ${tmuxVersion} may not work correctly. Version 2.1 or later is recommended.`,
+        );
+    }
+
     client.on('tmux-exit', () => setStatus('$(error) tmux-integrated: disconnected'));
 
     try {
@@ -167,6 +178,14 @@ async function ensureClientConnected(): Promise<boolean> {
         vscode.window.showErrorMessage(`tmux-integrated: Could not connect to tmux: ${err}`);
         return false;
     }
+
+    // Set a large initial control-client size so that individual pane
+    // resizes (via resize-pane) are not constrained by the client
+    // dimensions.  Each TmuxTerminal calls resize-pane with its own
+    // VS Code terminal dimensions.
+    await client.resizeWindowForClient(400, 200).catch(
+        (err) => console.error(`tmux-integrated: initial client resize error: ${err}`),
+    );
 
     bootstrapWindow = null;
     windowsToAdopt = [];
@@ -204,12 +223,6 @@ async function ensureClientConnected(): Promise<boolean> {
 // Helpers — terminal creation
 // ---------------------------------------------------------------------------
 
-function buildExtensionTerminalOptions(
-    existingWindow?: { windowId: string; paneId: string; windowIndex?: number },
-): vscode.ExtensionTerminalOptions {
-    return buildTerminalOptions(existingWindow);
-}
-
 function buildTerminalOptions(
     existingWindow?: { windowId: string; paneId: string; windowIndex?: number },
 ): vscode.ExtensionTerminalOptions {
@@ -240,7 +253,7 @@ function buildTerminalOptions(
 function buildTerminalProfile(
     existingWindow?: { windowId: string; paneId: string; windowIndex?: number },
 ): vscode.TerminalProfile {
-    return new vscode.TerminalProfile(buildExtensionTerminalOptions(existingWindow));
+    return new vscode.TerminalProfile(buildTerminalOptions(existingWindow));
 }
 
 function takeBootstrapWindow(): { windowId: string; paneId: string; windowIndex: number } | undefined {

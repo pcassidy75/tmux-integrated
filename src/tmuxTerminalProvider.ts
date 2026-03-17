@@ -46,6 +46,14 @@ const KEY_MAP: Record<string, string> = {
     '\x1b[24~': 'F12',
 };
 
+/**
+ * Pre-sorted key sequences: longest first so that multi-byte sequences
+ * (e.g. \x1b[15~) are matched before their single-byte prefixes (\x1b).
+ * Computed once at module load instead of on every keystroke.
+ */
+const SORTED_KEY_SEQUENCES: string[] =
+    Object.keys(KEY_MAP).sort((a, b) => b.length - a.length);
+
 export class TmuxTerminal implements vscode.Pseudoterminal {
     private readonly writeEmitter = new vscode.EventEmitter<string>();
     private readonly closeEmitter = new vscode.EventEmitter<number | void>();
@@ -121,8 +129,9 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
             // explicit `tmux rename-window` will update it.
             await this.client.sendCommand(`set-option -w -t ${windowId} automatic-rename off`).catch(() => {});
 
-            if (initialDimensions && this.windowId) {
-                await this.client.resizeWindowForClient(
+            if (initialDimensions && this.paneId) {
+                await this.client.resizePane(
+                    this.paneId,
                     initialDimensions.columns,
                     initialDimensions.rows,
                 );
@@ -187,9 +196,13 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
     }
 
     setDimensions(dimensions: vscode.TerminalDimensions): void {
-        if (this.windowId) {
+        if (this.paneId) {
+            // Resize the individual pane rather than the shared control
+            // client.  The old resizeWindowForClient (refresh-client -C)
+            // set a single size for ALL windows, so the last terminal to
+            // resize would force its dimensions on every other terminal.
             this.client
-                .resizeWindowForClient(dimensions.columns, dimensions.rows)
+                .resizePane(this.paneId, dimensions.columns, dimensions.rows)
                 .catch((err) => console.error(`tmux-integrated: resize error: ${err}`));
         }
     }
@@ -224,11 +237,10 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
                 .sendCommand(cmd)
                 .catch((err) => console.error(`tmux-integrated: send-keys error: ${err}`));
 
-        const knownSequences = Object.keys(KEY_MAP).sort((left, right) => right.length - left.length);
         let index = 0;
 
         while (index < data.length) {
-            const sequence = knownSequences.find((candidate) => data.startsWith(candidate, index));
+            const sequence = SORTED_KEY_SEQUENCES.find((candidate) => data.startsWith(candidate, index));
             if (sequence) {
                 send(`send-keys -t ${paneId} "${KEY_MAP[sequence]}"`);
                 index += sequence.length;
@@ -255,7 +267,7 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
                 if (nextChar === '\n' || nextChar.charCodeAt(0) < 0x20) {
                     break;
                 }
-                if (knownSequences.some((candidate) => data.startsWith(candidate, literalEnd))) {
+                if (SORTED_KEY_SEQUENCES.some((candidate) => data.startsWith(candidate, literalEnd))) {
                     break;
                 }
                 literalEnd += 1;
@@ -350,11 +362,8 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
                 this.pendingCarriageReturnCount = 0;
             }
 
-            if (char !== '\n' || !this.previousChunkEndedWithCarriageReturn) {
-                normalized += char;
-            }
-
-            this.previousChunkEndedWithCarriageReturn = char === '\r';
+            normalized += char;
+            this.previousChunkEndedWithCarriageReturn = false;
         }
 
         return normalized;
@@ -378,6 +387,13 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
             this.client.removeListener('tmux-exit', this.tmuxExitListener);
             this.tmuxExitListener = null;
         }
+
+        // Free the incremental UTF-8 decoder for this pane so the map in
+        // TmuxControlClient doesn't grow unboundedly over time.
+        if (this.paneId) {
+            this.client.removePaneDecoder(this.paneId);
+        }
+
         this.pendingCarriageReturnCount = 0;
         this.previousChunkEndedWithCarriageReturn = false;
 
