@@ -35,8 +35,8 @@ continue where you left off.
 - **Copilot / shell integration compatible** — VS Code's shell integration is
   passed through transparently so Copilot and other terminal features keep
   working.
-- **No mouse-mode conflicts** — tmux never renders a TUI inside your VS Code
-  terminal, so there are no mouse or scrolling issues.
+- **No mouse-mode conflicts** — tmux never draws its own interface inside your
+  VS Code terminal, so there are no mouse or scrolling issues.
 - **Status bar item** — shows the active session name; click to pick an
   existing window.
 
@@ -123,9 +123,7 @@ work exactly as they do in a normal VS Code terminal.
 
 ## Contributing
 
-See the repo wiki or open an issue if you'd like to contribute.  To run the
-extension locally, clone the repo, run `npm install`, and press `F5` in VS Code
-to launch the Extension Development Host.
+Contributions are welcome — open an issue or submit a pull request.
 
 ## License
 
