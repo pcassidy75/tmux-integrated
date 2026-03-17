@@ -234,7 +234,8 @@ export class TmuxControlClient extends EventEmitter {
         } else if (line.startsWith('%window-add ')) {
             this.emit('window-add', line.slice('%window-add '.length).trim());
         } else if (line.startsWith('%window-close ')) {
-            this.emit('window-close', line.slice('%window-close '.length).trim());
+            const windowId = line.slice('%window-close '.length).trim().split(/\s+/u)[0];
+            this.emit('window-close', windowId);
         } else if (line.startsWith('%window-renamed ')) {
             this.emit('window-renamed', parseWindowRenamed(line));
         } else if (line.startsWith('%layout-change ')) {
