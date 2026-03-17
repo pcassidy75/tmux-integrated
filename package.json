@@ -5,6 +5,7 @@
   "version": "0.1.0",
   "publisher": "tmux-integrated",
   "license": "GPL-3.0-only",
+  "icon": "images/icon.png",
   "repository": {
     "type": "git",
     "url": "https://github.com/pcassidy75/tmux-integrated"
