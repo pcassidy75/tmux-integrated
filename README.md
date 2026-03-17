@@ -6,7 +6,7 @@ Seamless [tmux](https://github.com/tmux/tmux) integration for VS Code terminals.
 
 VS Code terminals are lost the moment you close your laptop or lose a remote
 connection.  tmux solves the persistence problem but using it naively inside a
-VS Code terminal breaks:
+VS Code terminal breaks things:
 
 | Problem | What breaks |
 |---|---|
@@ -14,111 +14,80 @@ VS Code terminal breaks:
 | Run `tmux` directly in the terminal | `code <file>` no longer opens files in VS Code |
 | tmux mouse mode | Interferes with VS Code's own mouse handling |
 
-**tmux-integrated** solves all three by using tmux's **control mode** (`-CC`),
-exactly as iTerm2 does.  tmux runs in the background as a session manager;
-VS Code owns the visual layer.
-
-```
-VS Code terminal tab  ←→  tmux-integrated extension  ←→  tmux -CC  ←→  your shell
-```
-
-Each VS Code terminal tab corresponds to one tmux window.  Closing the tab
-**does not kill the tmux window** — the process keeps running.  When you
-reconnect you can open a new terminal and continue where you left off.
+**tmux-integrated** solves all three.  tmux runs in the background as a session
+manager; VS Code owns the visual layer.  Each VS Code terminal tab corresponds
+to one tmux window.  Closing the tab **does not kill the tmux window** — the
+process keeps running.  When you reconnect you can open a new terminal and
+continue where you left off.
 
 ## Features
 
 - **Persistent sessions** — one tmux session per workspace, named after the
   workspace folder.
-- **Smart default reconnect** — opening the `tmux-integrated` terminal profile reattaches
-  to an existing window when available; otherwise it creates a new window.
+- **Smart reconnect** — opening the `tmux-integrated` terminal profile
+  reattaches to an existing window when available; otherwise it creates a new
+  window.
 - **Explicit new window command** — **tmux: New tmux Terminal** always creates
   a fresh window in the session.
-- **`code <file>` works** — the `VSCODE_IPC_HOOK_CLI` socket is forwarded into
-  every new window so the `code` CLI can talk to the running VS Code instance.
-- **Copilot / shell integration compatible** — VS Code's shell integration
-  sequences are passed through transparently; tmux never renders them.
-- **No mouse-mode conflicts** — tmux is driven via control mode; it never
-  renders a TUI inside the VS Code terminal pane.
+- **`code <file>` works** — the VS Code CLI socket is forwarded into every
+  tmux window so the `code` command opens files in your running VS Code
+  instance.
+- **Copilot / shell integration compatible** — VS Code's shell integration is
+  passed through transparently so Copilot and other terminal features keep
+  working.
+- **No mouse-mode conflicts** — tmux never renders a TUI inside your VS Code
+  terminal, so there are no mouse or scrolling issues.
 - **Status bar item** — shows the active session name; click to pick an
   existing window.
 
 ## Requirements
 
-- tmux ≥ 2.0 (control mode was introduced in 2.0; 3.x recommended)
-- Linux or macOS
+- tmux ≥ 2.0 on the machine where your terminal runs (3.x recommended).
+  tmux is available on Linux, macOS, and Windows via WSL.
+- If you use VS Code on Windows with **Remote - SSH** or **WSL**, tmux only
+  needs to be installed on the remote or WSL side.
 
-## Local testing in VS Code
-
-If you want to test the extension locally without publishing it, use VS Code's
-Extension Development Host.
-
-1. In this repo, run `npm install` once if dependencies are not already installed.
-2. Press `F5` in VS Code.
-3. Choose **Run tmux-integrated**.
-4. A second VS Code window opens. This is the test window.
-5. In the test window, open the command palette and run **tmux: New tmux Terminal**.
-6. If prompted by macOS, allow terminal-related permissions for VS Code and tmux.
-
-If you plan to make code changes while testing, choose **Run tmux-integrated (watch)**
-instead. That keeps TypeScript compiling in the background.
-
-### Quick sanity checks
-
-In the test window, verify these in order:
-
-1. The status bar shows the active tmux session name.
-2. Running `pwd` works in the tmux-backed terminal.
-3. Close the terminal tab, then run **tmux: Attach to tmux Window** and reopen it.
-4. Start a long-running command like `sleep 30`, close the tab, reattach, and confirm it is still running.
-5. Run `code README.md` inside the tmux terminal and confirm VS Code opens the file.
-
-## Usage
+## Getting started
 
 1. Install the extension.
-2. Open the command palette → **tmux: New tmux Terminal** (or set the
-  `"tmux-integrated"` profile as your default terminal profile in settings).
-3. Terminals opened through the profile reattach to existing windows when
-  possible, and only create a new window if no unclaimed window is available.
+2. Open the command palette and run **tmux: New tmux Terminal** (or set
+   `"tmux-integrated"` as your default terminal profile — see below).
+3. That's it. Terminals opened through the profile automatically reattach to
+   existing windows when possible.
 
 ### Set as the default terminal profile
 
-```json
-// settings.json
+In your VS Code **settings.json**, set the default profile for the platform
+where your terminal runs:
+
+```jsonc
+// settings.json — use whichever platform applies to you
 {
   "terminal.integrated.defaultProfile.linux": "tmux-integrated",
-  "terminal.integrated.defaultProfile.osx":  "tmux-integrated"
+  "terminal.integrated.defaultProfile.osx": "tmux-integrated",
+  "terminal.integrated.defaultProfile.windows": "tmux-integrated"  // WSL
 }
 ```
+
+> **Tip:** If you connect to a remote host via **Remote - SSH**, apply this
+> setting in **Remote Settings (JSON)** on the remote side, and make sure the
+> extension is installed in that remote extension host.
 
 ### Reconnect after a disconnect
 
-All your processes are still running inside tmux. Use **tmux: Attach to tmux
-Window** to reopen an existing tmux window in VS Code; the extension restores
-the current visible pane contents and resumes live output. **tmux: New tmux
-Terminal** still creates a fresh tmux window in the same session.
+All your processes are still running inside tmux.  Use **tmux: Attach to tmux
+Window** to reopen an existing tmux window in VS Code — the extension restores
+visible output and resumes live updates.  **tmux: New tmux Terminal** creates a
+fresh tmux window in the same session.
 
 ### Troubleshooting default profile selection
 
-If setting a default terminal profile appears to bypass this extension and opens
-plain tmux (often with an unexpected session name), VS Code is usually picking a
-shell profile named `tmux` rather than the extension profile.
+If your default terminal opens plain tmux instead of the extension (often with
+an unexpected session name), VS Code is probably picking a shell profile named
+`tmux` rather than the extension profile.
 
-Use the extension profile name exactly:
-
-```json
-// settings.json
-{
-  "terminal.integrated.defaultProfile.linux": "tmux-integrated",
-  "terminal.integrated.defaultProfile.osx": "tmux-integrated"
-}
-```
-
-Then reload the VS Code window and open a new terminal tab.
-
-For Remote SSH, apply the same setting in **Remote Settings (JSON)** on the
-remote host, and make sure **tmux-integrated** is installed in that remote
-extension host.
+Make sure the profile name is exactly `"tmux-integrated"` in your settings,
+then reload the VS Code window.
 
 ## Extension settings
 
@@ -136,22 +105,11 @@ extension host.
 
 ## How it works
 
-The extension spawns `tmux -CC new-session -A -s <session>` as a child
-process. In control mode tmux outputs structured protocol messages instead of
-rendering a TUI. The extension parses `%output` and `%extended-output`
-notifications, decodes tmux's octal-escaped byte stream, and forwards the
-result to the VS Code terminal renderer (xterm.js), which handles
-ANSI/VT100/OSC sequences — including VS Code's own shell integration sequences
-(OSC 633) that Copilot relies on.
-
-The tmux control client itself is attached through a bundled PTY bridge so
-`tmux -CC` behaves like a terminal client instead of a plain pipe consumer.
-Pane output still flows through tmux control-mode notifications into the VS
-Code pseudoterminal.
-
-Window sizing is synchronized with tmux control mode using `refresh-client -C`
-for the tmux window shown in each VS Code terminal, rather than mutating pane
-layout with `resize-pane`.
+The extension uses tmux's **control mode** (`-CC`) — the same approach used by
+[iTerm2](https://iterm2.com/).  In control mode tmux manages sessions and
+windows in the background while VS Code handles all rendering.  This means
+shell integration, Copilot, mouse support, and the `code` CLI all continue to
+work exactly as they do in a normal VS Code terminal.
 
 ## Differences from existing solutions
 
@@ -163,13 +121,13 @@ layout with `resize-pane`.
 | `code` command works | No | Yes |
 | Mouse-mode free | No | Yes |
 
+## Contributing
+
+See the repo wiki or open an issue if you'd like to contribute.  To run the
+extension locally, clone the repo, run `npm install`, and press `F5` in VS Code
+to launch the Extension Development Host.
+
 ## License
 
 This project is licensed under the **GNU General Public License v3.0 (GPL-3.0-only)**.
 See [LICENSE](LICENSE) for the full license text.
-
-The GPL was chosen because the control-mode integration approach is closely
-inspired by the technique pioneered by [iTerm2](https://iterm2.com/) (GPL-2.0+)
-and tmux itself is released under the ISC / BSD license family.  Using GPL-3.0
-ensures derivative work obligations are clear and that the project remains free
-and open for everyone.
