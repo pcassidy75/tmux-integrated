@@ -6,8 +6,8 @@
 *   handleInput() → forwards key data through tmux control commands.
  *   setDimensions() → updates the control client window size for the tmux
  *                     window shown in this VS Code terminal.
- *   close()       → unsubscribes from output; intentionally does NOT kill the
- *                   tmux window so the process persists across reconnects.
+ *   close()       → kills the tmux window (unless VS Code is shutting down,
+ *                   in which case the window survives for later re-adoption).
  */
 
 import * as vscode from 'vscode';
@@ -49,14 +49,17 @@ const KEY_MAP: Record<string, string> = {
 export class TmuxTerminal implements vscode.Pseudoterminal {
     private readonly writeEmitter = new vscode.EventEmitter<string>();
     private readonly closeEmitter = new vscode.EventEmitter<number | void>();
+    private readonly nameEmitter = new vscode.EventEmitter<string>();
 
     readonly onDidWrite: vscode.Event<string> = this.writeEmitter.event;
     readonly onDidClose: vscode.Event<number | void> = this.closeEmitter.event;
+    readonly onDidChangeName: vscode.Event<string> = this.nameEmitter.event;
 
     private paneId: string | null = null;
     private windowId: string | null = null;
+    private windowClosedByTmux = false;
     private readonly existingWindow: { windowId: string; paneId: string } | null;
-    private readonly closeWindowOnOpen: string | undefined;
+    private readonly isDeactivating: () => boolean;
     private readonly lifecycleHooks: {
         onWindowAttached?: (windowId: string) => void;
         onWindowDetached?: (windowId: string) => void;
@@ -65,6 +68,7 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
     private attachedWindowNotified = false;
     private outputListener: ((ev: TmuxPaneOutput) => void) | null = null;
     private windowCloseListener: ((id: string) => void) | null = null;
+    private windowRenameListener: ((ev: { windowId: string; name: string } | null) => void) | null = null;
     private tmuxExitListener: (() => void) | null = null;
     private previousChunkEndedWithCarriageReturn = false;
     private pendingCarriageReturnCount = 0;
@@ -77,15 +81,15 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
         private readonly extraEnv: Record<string, string>,
         private readonly shell: string | undefined,
         existingWindow?: { windowId: string; paneId: string },
-        closeWindowOnOpen?: string,
         lifecycleHooks?: {
             onWindowAttached?: (windowId: string) => void;
             onWindowDetached?: (windowId: string) => void;
             onWindowAttachFailed?: (windowId: string) => void;
         },
+        isDeactivating?: () => boolean,
     ) {
         this.existingWindow = existingWindow ?? null;
-        this.closeWindowOnOpen = closeWindowOnOpen;
+        this.isDeactivating = isDeactivating ?? (() => false);
         this.lifecycleHooks = lifecycleHooks ?? {};
     }
 
@@ -108,6 +112,10 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
             this.lifecycleHooks.onWindowAttached?.(windowId);
             this.attachedWindowNotified = true;
 
+            // Disable automatic-rename so the tab name stays stable; only
+            // explicit `tmux rename-window` will update it.
+            await this.client.sendCommand(`set-option -w -t ${windowId} automatic-rename off`).catch(() => {});
+
             if (initialDimensions && this.windowId) {
                 await this.client.resizeWindowForClient(
                     initialDimensions.columns,
@@ -128,8 +136,9 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
             // (e.g. the shell process exited).
             this.windowCloseListener = (id: string) => {
                 if (id === this.windowId) {
+                    this.windowClosedByTmux = true;
                     this.cleanup();
-                    this.closeEmitter.fire(0);
+                    this.closeEmitter.fire(undefined);
                 }
             };
             this.client.on('window-close', this.windowCloseListener);
@@ -142,11 +151,13 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
             };
             this.client.on('tmux-exit', this.tmuxExitListener);
 
-            if (this.closeWindowOnOpen && this.closeWindowOnOpen !== windowId) {
-                await this.client.killWindow(this.closeWindowOnOpen).catch((err) => {
-                    console.error(`tmux-integrated: bootstrap window cleanup failed: ${err}`);
-                });
-            }
+            // Sync tmux window name → VS Code tab name.
+            this.windowRenameListener = (ev) => {
+                if (ev && ev.windowId === this.windowId) {
+                    this.nameEmitter.fire(ev.name);
+                }
+            };
+            this.client.on('window-renamed', this.windowRenameListener);
 
             if (this.existingWindow) {
                 // Seed the renderer with the current visible pane contents.
@@ -185,8 +196,16 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
     }
 
     close(): void {
-        // The tmux window is intentionally left running so the session persists.
+        const windowId = this.windowId;
         this.cleanup();
+
+        // Kill the tmux window unless it already died (shell exit) or
+        // VS Code is shutting down (session persists for re-adoption).
+        if (windowId && !this.windowClosedByTmux && !this.isDeactivating()) {
+            this.client.killWindow(windowId).catch((err) => {
+                console.error(`tmux-integrated: failed to kill window ${windowId}: ${err}`);
+            });
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -354,6 +373,10 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
         if (this.windowCloseListener) {
             this.client.removeListener('window-close', this.windowCloseListener);
             this.windowCloseListener = null;
+        }
+        if (this.windowRenameListener) {
+            this.client.removeListener('window-renamed', this.windowRenameListener);
+            this.windowRenameListener = null;
         }
         if (this.tmuxExitListener) {
             this.client.removeListener('tmux-exit', this.tmuxExitListener);

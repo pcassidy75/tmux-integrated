@@ -80,7 +80,7 @@ export class TmuxControlClient extends EventEmitter {
     }
 
     /** Spawn tmux -CC through a PTY bridge so tmux sees a real pseudo-terminal. */
-    connect(): Promise<void> {
+    connect(options?: { startDirectory?: string }): Promise<void> {
         return new Promise((resolve, reject) => {
             const tmuxArgs = [
                 '-CC',
@@ -90,6 +90,10 @@ export class TmuxControlClient extends EventEmitter {
                 '-x', '220',    // initial width  (will be resized per pane)
                 '-y', '50',     // initial height
             ];
+
+            if (options?.startDirectory) {
+                tmuxArgs.push('-c', options.startDirectory);
+            }
 
             this.proc = spawn(this.pythonBinaryPath, [this.ptyBridgePath, this.tmuxBinaryPath, ...tmuxArgs], {
                 cwd: process.cwd(),
@@ -496,7 +500,7 @@ function decodeOutput(encoded: string): Buffer {
  * Minimal shell-escaping: wrap value in single quotes and escape any
  * single quotes inside it.  Safe for passing to tmux command strings.
  */
-function shellescape(value: string): string {
+export function shellescape(value: string): string {
     return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
