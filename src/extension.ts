@@ -34,6 +34,8 @@ let pythonBinaryPath: string | null = null;
 let extensionRootPath = process.cwd();
 let defaultStartDirectory = process.cwd();
 let bootstrapWindowId: string | null = null;
+const attachedWindowIds = new Set<string>();
+const reservedWindowIds = new Set<string>();
 
 // ---------------------------------------------------------------------------
 // Activation / deactivation
@@ -76,7 +78,10 @@ function registerTerminalProfile(context: vscode.ExtensionContext): void {
                 if (!connected) {
                     throw new Error('tmux-integrated: Could not connect to tmux.');
                 }
-                return buildTerminalProfile(takeBootstrapWindowToClose());
+
+                const existingWindow = await pickWindowForDefaultProfile();
+                const closeBootstrapWindow = existingWindow ? undefined : takeBootstrapWindowToClose();
+                return buildTerminalProfile(existingWindow, closeBootstrapWindow);
             },
         }),
     );
@@ -198,12 +203,29 @@ function buildTerminalOptions(
             shell || undefined,
             existingWindow,
             closeWindowOnOpen,
+            {
+                onWindowAttached: (windowId) => {
+                    reservedWindowIds.delete(windowId);
+                    attachedWindowIds.add(windowId);
+                },
+                onWindowDetached: (windowId) => {
+                    reservedWindowIds.delete(windowId);
+                    attachedWindowIds.delete(windowId);
+                },
+                onWindowAttachFailed: (windowId) => {
+                    reservedWindowIds.delete(windowId);
+                    attachedWindowIds.delete(windowId);
+                },
+            },
         ),
     };
 }
 
-function buildTerminalProfile(closeWindowOnOpen?: string): vscode.TerminalProfile {
-    return new vscode.TerminalProfile(buildExtensionTerminalOptions(undefined, closeWindowOnOpen));
+function buildTerminalProfile(
+    existingWindow?: { windowId: string; paneId: string },
+    closeWindowOnOpen?: string,
+): vscode.TerminalProfile {
+    return new vscode.TerminalProfile(buildExtensionTerminalOptions(existingWindow, closeWindowOnOpen));
 }
 
 function takeBootstrapWindowToClose(): string | undefined {
@@ -251,6 +273,29 @@ async function showAttachWindowPicker(sessionName: string): Promise<void> {
             paneId: picked.paneId,
         }));
         terminal.show();
+    }
+}
+
+async function pickWindowForDefaultProfile(): Promise<{ windowId: string; paneId: string } | undefined> {
+    try {
+        const windows = await client!.listWindows();
+        const candidate = windows.find((window) =>
+            window.id !== bootstrapWindowId &&
+            !attachedWindowIds.has(window.id) && !reservedWindowIds.has(window.id),
+        );
+
+        if (!candidate) {
+            return undefined;
+        }
+
+        reservedWindowIds.add(candidate.id);
+        return {
+            windowId: candidate.id,
+            paneId: candidate.paneId,
+        };
+    } catch (err) {
+        console.error(`tmux-integrated: auto-attach window selection failed: ${err}`);
+        return undefined;
     }
 }
 

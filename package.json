@@ -34,7 +34,7 @@
       "profiles": [
         {
           "id": "tmux-integrated.terminal",
-          "title": "tmux"
+          "title": "tmux-integrated"
         }
       ]
     },

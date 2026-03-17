@@ -57,6 +57,12 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
     private windowId: string | null = null;
     private readonly existingWindow: { windowId: string; paneId: string } | null;
     private readonly closeWindowOnOpen: string | undefined;
+    private readonly lifecycleHooks: {
+        onWindowAttached?: (windowId: string) => void;
+        onWindowDetached?: (windowId: string) => void;
+        onWindowAttachFailed?: (windowId: string) => void;
+    };
+    private attachedWindowNotified = false;
     private outputListener: ((ev: TmuxPaneOutput) => void) | null = null;
     private windowCloseListener: ((id: string) => void) | null = null;
     private tmuxExitListener: (() => void) | null = null;
@@ -72,9 +78,15 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
         private readonly shell: string | undefined,
         existingWindow?: { windowId: string; paneId: string },
         closeWindowOnOpen?: string,
+        lifecycleHooks?: {
+            onWindowAttached?: (windowId: string) => void;
+            onWindowDetached?: (windowId: string) => void;
+            onWindowAttachFailed?: (windowId: string) => void;
+        },
     ) {
         this.existingWindow = existingWindow ?? null;
         this.closeWindowOnOpen = closeWindowOnOpen;
+        this.lifecycleHooks = lifecycleHooks ?? {};
     }
 
     // -----------------------------------------------------------------------
@@ -93,6 +105,8 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
             const { windowId, paneId } = targetWindow;
             this.windowId = windowId;
             this.paneId = paneId;
+            this.lifecycleHooks.onWindowAttached?.(windowId);
+            this.attachedWindowNotified = true;
 
             if (initialDimensions && this.windowId) {
                 await this.client.resizeWindowForClient(
@@ -147,6 +161,9 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
             }
 
         } catch (err) {
+            if (this.existingWindow?.windowId) {
+                this.lifecycleHooks.onWindowAttachFailed?.(this.existingWindow.windowId);
+            }
             this.writeEmitter.fire(`\r\ntmux-integrated: error creating tmux window: ${err}\r\n`);
             this.closeEmitter.fire(1);
         }
@@ -344,5 +361,10 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
         }
         this.pendingCarriageReturnCount = 0;
         this.previousChunkEndedWithCarriageReturn = false;
+
+        if (this.windowId && this.attachedWindowNotified) {
+            this.lifecycleHooks.onWindowDetached?.(this.windowId);
+            this.attachedWindowNotified = false;
+        }
     }
 }

@@ -30,8 +30,10 @@ reconnect you can open a new terminal and continue where you left off.
 
 - **Persistent sessions** — one tmux session per workspace, named after the
   workspace folder.
-- **New terminal = new tmux window** — each terminal tab gets its own window in
-  the session.
+- **Smart default reconnect** — opening the `tmux-integrated` terminal profile reattaches
+  to an existing window when available; otherwise it creates a new window.
+- **Explicit new window command** — **tmux: New tmux Terminal** always creates
+  a fresh window in the session.
 - **`code <file>` works** — the `VSCODE_IPC_HOOK_CLI` socket is forwarded into
   every new window so the `code` CLI can talk to the running VS Code instance.
 - **Copilot / shell integration compatible** — VS Code's shell integration
@@ -75,17 +77,17 @@ In the test window, verify these in order:
 
 1. Install the extension.
 2. Open the command palette → **tmux: New tmux Terminal** (or set the
-   `"tmux"` profile as your default terminal profile in settings).
-3. Every terminal opened through the profile creates a new window in the
-   workspace's tmux session.
+  `"tmux-integrated"` profile as your default terminal profile in settings).
+3. Terminals opened through the profile reattach to existing windows when
+  possible, and only create a new window if no unclaimed window is available.
 
 ### Set as the default terminal profile
 
 ```json
 // settings.json
 {
-  "terminal.integrated.defaultProfile.linux": "tmux",
-  "terminal.integrated.defaultProfile.osx":  "tmux"
+  "terminal.integrated.defaultProfile.linux": "tmux-integrated",
+  "terminal.integrated.defaultProfile.osx":  "tmux-integrated"
 }
 ```
 
@@ -95,6 +97,28 @@ All your processes are still running inside tmux. Use **tmux: Attach to tmux
 Window** to reopen an existing tmux window in VS Code; the extension restores
 the current visible pane contents and resumes live output. **tmux: New tmux
 Terminal** still creates a fresh tmux window in the same session.
+
+### Troubleshooting default profile selection
+
+If setting a default terminal profile appears to bypass this extension and opens
+plain tmux (often with an unexpected session name), VS Code is usually picking a
+shell profile named `tmux` rather than the extension profile.
+
+Use the extension profile name exactly:
+
+```json
+// settings.json
+{
+  "terminal.integrated.defaultProfile.linux": "tmux-integrated",
+  "terminal.integrated.defaultProfile.osx": "tmux-integrated"
+}
+```
+
+Then reload the VS Code window and open a new terminal tab.
+
+For Remote SSH, apply the same setting in **Remote Settings (JSON)** on the
+remote host, and make sure **tmux-integrated** is installed in that remote
+extension host.
 
 ## Extension settings
 
