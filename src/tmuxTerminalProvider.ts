@@ -77,7 +77,6 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
     private outputListener: ((ev: TmuxPaneOutput) => void) | null = null;
     private windowCloseListener: ((id: string) => void) | null = null;
     private tmuxExitListener: (() => void) | null = null;
-    private previousChunkEndedWithCarriageReturn = false;
     private pendingCarriageReturnCount = 0;
     private reconcileTimer: ReturnType<typeof setTimeout> | null = null;
     private lastInputTime = 0;
@@ -346,14 +345,12 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
         for (const char of data) {
             if (char === '\r') {
                 this.pendingCarriageReturnCount += 1;
-                this.previousChunkEndedWithCarriageReturn = true;
                 continue;
             }
 
             if (char === '\n') {
                 normalized += '\r\n';
                 this.pendingCarriageReturnCount = 0;
-                this.previousChunkEndedWithCarriageReturn = false;
                 continue;
             }
 
@@ -363,7 +360,6 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
             }
 
             normalized += char;
-            this.previousChunkEndedWithCarriageReturn = false;
         }
 
         return normalized;
@@ -395,7 +391,6 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
         }
 
         this.pendingCarriageReturnCount = 0;
-        this.previousChunkEndedWithCarriageReturn = false;
 
         if (this.windowId && this.attachedWindowNotified) {
             this.lifecycleHooks.onWindowDetached?.(this.windowId);
