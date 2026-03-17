@@ -23,6 +23,7 @@ import { TmuxTerminal } from './tmuxTerminalProvider';
 interface AttachWindowItem extends vscode.QuickPickItem {
     windowId: string;
     paneId: string;
+    windowIndex: number;
 }
 
 let client: TmuxControlClient | null = null;
@@ -33,8 +34,8 @@ let tmuxBinaryPath: string | null = null;
 let pythonBinaryPath: string | null = null;
 let extensionRootPath = process.cwd();
 let defaultStartDirectory = process.cwd();
-let bootstrapWindow: { windowId: string; paneId: string; name?: string } | null = null;
-let windowsToAdopt: { windowId: string; paneId: string; name?: string }[] = [];
+let bootstrapWindow: { windowId: string; paneId: string; windowIndex: number } | null = null;
+let windowsToAdopt: { windowId: string; paneId: string; windowIndex: number }[] = [];
 let disposing = false;
 const attachedWindowIds = new Set<string>();
 
@@ -173,7 +174,7 @@ async function ensureClientConnected(): Promise<boolean> {
         try {
             const windows = await client.listWindows();
             if (windows.length === 1) {
-                bootstrapWindow = { windowId: windows[0].id, paneId: windows[0].paneId, name: windows[0].name };
+                bootstrapWindow = { windowId: windows[0].id, paneId: windows[0].paneId, windowIndex: windows[0].index };
             }
         } catch (err) {
             console.error(`tmux-integrated: bootstrap window lookup failed: ${err}`);
@@ -181,7 +182,7 @@ async function ensureClientConnected(): Promise<boolean> {
     } else {
         try {
             const windows = await client.listWindows();
-            windowsToAdopt = windows.map(w => ({ windowId: w.id, paneId: w.paneId, name: w.name }));
+            windowsToAdopt = windows.map(w => ({ windowId: w.id, paneId: w.paneId, windowIndex: w.index }));
         } catch (err) {
             console.error(`tmux-integrated: window enumeration failed: ${err}`);
         }
@@ -204,19 +205,19 @@ async function ensureClientConnected(): Promise<boolean> {
 // ---------------------------------------------------------------------------
 
 function buildExtensionTerminalOptions(
-    existingWindow?: { windowId: string; paneId: string; name?: string },
+    existingWindow?: { windowId: string; paneId: string; windowIndex?: number },
 ): vscode.ExtensionTerminalOptions {
     return buildTerminalOptions(existingWindow);
 }
 
 function buildTerminalOptions(
-    existingWindow?: { windowId: string; paneId: string; name?: string },
+    existingWindow?: { windowId: string; paneId: string; windowIndex?: number },
 ): vscode.ExtensionTerminalOptions {
     const cfg = vscode.workspace.getConfiguration('tmux-integrated');
     const shell = (cfg.get<string>('shell') || process.env.SHELL || '/bin/bash') || undefined;
 
     return {
-        name: existingWindow?.name || 'tmux',
+        name: existingWindow?.windowIndex !== undefined ? `tmux:${existingWindow.windowIndex}` : 'tmux',
         pty: new TmuxTerminal(
             client!,
             defaultStartDirectory,
@@ -237,12 +238,12 @@ function buildTerminalOptions(
 }
 
 function buildTerminalProfile(
-    existingWindow?: { windowId: string; paneId: string; name?: string },
+    existingWindow?: { windowId: string; paneId: string; windowIndex?: number },
 ): vscode.TerminalProfile {
     return new vscode.TerminalProfile(buildExtensionTerminalOptions(existingWindow));
 }
 
-function takeBootstrapWindow(): { windowId: string; paneId: string; name?: string } | undefined {
+function takeBootstrapWindow(): { windowId: string; paneId: string; windowIndex: number } | undefined {
     const bw = bootstrapWindow;
     bootstrapWindow = null;
     return bw ?? undefined;
@@ -253,7 +254,7 @@ function takeBootstrapWindow(): { windowId: string; paneId: string; name?: strin
  * the window to use for the current provideTerminalProfile request; any
  * remaining windows are scheduled to appear as additional VS Code tabs.
  */
-function adoptNextWindow(): { windowId: string; paneId: string; name?: string } | undefined {
+function adoptNextWindow(): { windowId: string; paneId: string; windowIndex: number } | undefined {
     if (windowsToAdopt.length === 0) { return undefined; }
     const next = windowsToAdopt.shift()!;
 
@@ -301,6 +302,7 @@ async function showAttachWindowPicker(sessionName: string): Promise<void> {
         detail: `Window ${w.id} • Active pane ${w.paneId}`,
         windowId: w.id,
         paneId: w.paneId,
+        windowIndex: w.index,
     }));
 
     const picked = await vscode.window.showQuickPick(items, {
@@ -312,7 +314,7 @@ async function showAttachWindowPicker(sessionName: string): Promise<void> {
         const terminal = vscode.window.createTerminal(buildTerminalOptions({
             windowId: picked.windowId,
             paneId: picked.paneId,
-            name: picked.label.replace(/^\$\(terminal\)\s*/, ''),
+            windowIndex: picked.windowIndex,
         }));
         terminal.show();
     }

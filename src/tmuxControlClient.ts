@@ -34,6 +34,7 @@ export interface TmuxPaneOutput {
 
 export interface TmuxWindow {
     id: string;
+    index: number;
     name: string;
     paneId: string;
     active: boolean;
@@ -319,8 +320,8 @@ export class TmuxControlClient extends EventEmitter {
         rows?: number;
         shell?: string;
         env?: Record<string, string>;
-    } = {}): Promise<{ windowId: string; paneId: string }> {
-        let cmd = 'new-window -P -F "#{window_id} #{pane_id}"';
+    } = {}): Promise<{ windowId: string; paneId: string; windowIndex: number }> {
+        let cmd = 'new-window -P -F "#{window_id} #{pane_id} #{window_index}"';
 
         if (options.name) {
             cmd += ` -n ${shellescape(options.name)}`;
@@ -339,10 +340,10 @@ export class TmuxControlClient extends EventEmitter {
 
         const result = await this.sendCommand(cmd);
         const parts = (result[0] ?? '').trim().split(' ');
-        if (parts.length < 2 || !parts[0].startsWith('@') || !parts[1].startsWith('%')) {
+        if (parts.length < 3 || !parts[0].startsWith('@') || !parts[1].startsWith('%')) {
             throw new Error(`Unexpected new-window response: ${result[0] ?? '(empty)'}`);
         }
-        return { windowId: parts[0], paneId: parts[1] };
+        return { windowId: parts[0], paneId: parts[1], windowIndex: Number.parseInt(parts[2] ?? '0', 10) };
     }
 
     /** Return the pty path for a pane (e.g. /dev/pts/5). */
@@ -365,13 +366,13 @@ export class TmuxControlClient extends EventEmitter {
 
     async listWindows(): Promise<TmuxWindow[]> {
         const res = await this.sendCommand(
-            'list-windows -F "#{window_id}|#{window_name}|#{pane_id}|#{window_active}"',
+            'list-windows -F "#{window_id}|#{window_index}|#{window_name}|#{pane_id}|#{window_active}"',
         );
         return res
             .filter((l) => l.trim())
             .map((l) => {
-                const [id, name, paneId, active] = l.split('|');
-                return { id, name, paneId, active: active?.trim() === '1' };
+                const [id, indexStr, name, paneId, active] = l.split('|');
+                return { id, index: Number.parseInt(indexStr ?? '0', 10), name, paneId, active: active?.trim() === '1' };
             });
     }
 
