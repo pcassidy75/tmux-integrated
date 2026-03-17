@@ -1,7 +1,7 @@
 /**
  * TmuxControlClient
  *
- * Connects to a tmux server using control mode (`tmux -C`).  In control mode
+ * Connects to a tmux server using control mode (`tmux -CC`).  In control mode
  * tmux does not render any UI to the terminal; instead it sends structured
  * protocol messages on stdout and accepts commands on stdin.  This lets the
  * extension own the visual layer (VS Code terminals) while tmux provides
@@ -73,15 +73,17 @@ export class TmuxControlClient extends EventEmitter {
     constructor(
         private readonly sessionName: string,
         private readonly tmuxBinaryPath: string,
+        private readonly pythonBinaryPath: string,
+        private readonly ptyBridgePath: string,
     ) {
         super();
     }
 
-    /** Spawn `tmux -C new-session -A -s <name>` and wait for the first %end. */
+    /** Spawn tmux -CC through a PTY bridge so tmux sees a real pseudo-terminal. */
     connect(): Promise<void> {
         return new Promise((resolve, reject) => {
             const tmuxArgs = [
-                '-C',           // control mode
+                '-CC',
                 'new-session',
                 '-A',           // attach to existing session if it exists
                 '-s', this.sessionName,
@@ -89,9 +91,13 @@ export class TmuxControlClient extends EventEmitter {
                 '-y', '50',     // initial height
             ];
 
-            this.proc = spawn(this.tmuxBinaryPath, tmuxArgs, {
+            this.proc = spawn(this.pythonBinaryPath, [this.ptyBridgePath, this.tmuxBinaryPath, ...tmuxArgs], {
                 cwd: process.cwd(),
-                env: { ...process.env },
+                env: {
+                    ...process.env,
+                    TMUX_INTEGRATED_PTY_COLS: '220',
+                    TMUX_INTEGRATED_PTY_ROWS: '50',
+                },
                 stdio: ['pipe', 'pipe', 'pipe'],
             });
 
@@ -296,7 +302,7 @@ export class TmuxControlClient extends EventEmitter {
                 return;
             }
             this.pendingQueue.push({ resolve, reject });
-            this.proc.stdin.write(command + '\n');
+            this.proc.stdin.write(command + '\r');
         });
     }
 
@@ -408,7 +414,10 @@ export class TmuxControlClient extends EventEmitter {
         }
 
         const res = await this.sendCommand(cmd);
-        return res.join('\n');
+        // Command responses are ingested as latin1 (byte-transparent) for
+        // binary-safe %output parsing.  Re-encode to UTF-8 for text results
+        // so multi-byte characters (e.g. powerline glyphs) survive.
+        return res.map(l => Buffer.from(l, 'latin1').toString('utf8')).join('\n');
     }
 
     async getPaneCursor(paneId: string): Promise<TmuxPaneCursor> {
@@ -434,7 +443,7 @@ export class TmuxControlClient extends EventEmitter {
 
     disconnect(): void {
         if (this.proc) {
-            try { this.proc.stdin.write('detach\n'); } catch { /* ignore */ }
+            try { this.proc.stdin.write('detach\r'); } catch { /* ignore */ }
             this.proc.kill();
             this.proc = null;
         }

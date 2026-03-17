@@ -30,6 +30,8 @@ let statusBar: vscode.StatusBarItem | null = null;
 let tmuxVersion: string | null = null;
 let currentSessionName = 'vscode';
 let tmuxBinaryPath: string | null = null;
+let pythonBinaryPath: string | null = null;
+let extensionRootPath = process.cwd();
 let defaultStartDirectory = process.cwd();
 let bootstrapWindowId: string | null = null;
 
@@ -38,6 +40,7 @@ let bootstrapWindowId: string | null = null;
 // ---------------------------------------------------------------------------
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
+    extensionRootPath = context.extensionPath;
     defaultStartDirectory = resolveStartDirectory(context.extensionPath);
     currentSessionName = resolveSessionName();
 
@@ -108,12 +111,13 @@ async function ensureClientConnected(): Promise<boolean> {
     // --- Check tmux is available ------------------------------------------
     try {
         tmuxBinaryPath = resolveTmuxBinaryPath();
+        pythonBinaryPath = resolvePythonBinaryPath();
         tmuxVersion = execFileSync(tmuxBinaryPath, ['-V'], { encoding: 'utf8' }).trim();
     } catch {
-        setStatus('$(error) tmux-integrated: not found');
+        setStatus('$(error) tmux-integrated: dependency missing');
         const choice = await vscode.window.showErrorMessage(
-            'tmux-integrated: tmux is not installed or not in PATH.',
-            'Show install instructions',
+            'tmux-integrated: tmux or python3 is not installed or not in PATH.',
+            'Show tmux install instructions',
         );
         if (choice) {
             vscode.env.openExternal(
@@ -126,7 +130,12 @@ async function ensureClientConnected(): Promise<boolean> {
     // --- Determine session name and connect ---------------------------------
     currentSessionName = resolveSessionName();
     const sessionAlreadyExists = tmuxSessionExists(tmuxBinaryPath!, currentSessionName);
-    client = new TmuxControlClient(currentSessionName, tmuxBinaryPath!);
+    client = new TmuxControlClient(
+        currentSessionName,
+        tmuxBinaryPath!,
+        pythonBinaryPath!,
+        path.join(extensionRootPath, 'tmux_pty_bridge.py'),
+    );
 
     client.on('tmux-exit', () => setStatus('$(error) tmux-integrated: disconnected'));
 
@@ -309,6 +318,34 @@ function resolveTmuxBinaryPath(): string {
 
     if (!resolved) {
         throw new Error('tmux binary not found');
+    }
+
+    return resolved.split(/\r?\n/u, 1)[0];
+}
+
+function resolvePythonBinaryPath(): string {
+    const candidates = [
+        '/opt/homebrew/bin/python3',
+        '/usr/local/bin/python3',
+        '/usr/bin/python3',
+    ];
+
+    for (const candidate of candidates) {
+        try {
+            execFileSync(candidate, ['-c', 'import sys'], { stdio: ['ignore', 'ignore', 'ignore'] });
+            return candidate;
+        } catch {
+            // Try the next candidate.
+        }
+    }
+
+    const resolved = execSync('command -v python3 || which python3', {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+
+    if (!resolved) {
+        throw new Error('python3 binary not found');
     }
 
     return resolved.split(/\r?\n/u, 1)[0];

@@ -120,9 +120,10 @@ result to the VS Code terminal renderer (xterm.js), which handles
 ANSI/VT100/OSC sequences — including VS Code's own shell integration sequences
 (OSC 633) that Copilot relies on.
 
-User keystrokes from the VS Code terminal are written directly to the tmux
-pane's PTY slave device, bypassing the `send-keys` encoding layer for maximum
-fidelity.
+The tmux control client itself is attached through a bundled PTY bridge so
+`tmux -CC` behaves like a terminal client instead of a plain pipe consumer.
+Pane output still flows through tmux control-mode notifications into the VS
+Code pseudoterminal.
 
 Window sizing is synchronized with tmux control mode using `refresh-client -C`
 for the tmux window shown in each VS Code terminal, rather than mutating pane
