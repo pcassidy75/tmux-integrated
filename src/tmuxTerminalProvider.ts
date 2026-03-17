@@ -117,16 +117,8 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
             this.lifecycleHooks.onWindowAttached?.(windowId);
             this.attachedWindowNotified = true;
 
-            // Disable automatic-rename so the tab name stays stable; only
-            // explicit `tmux rename-window` will update it.
-            await this.client.sendCommand(`set-option -w -t ${windowId} automatic-rename off`).catch(() => {});
-
-            if (initialDimensions && this.windowId) {
-                await this.client.resizeWindowForClient(
-                    initialDimensions.columns,
-                    initialDimensions.rows,
-                );
-            }
+            // Register event listeners BEFORE any async operations so that
+            // notifications arriving during awaits are not lost.
 
             // Forward pane output to the VS Code terminal renderer.
             this.outputListener = ({ paneId: id, data }: TmuxPaneOutput) => {
@@ -155,6 +147,18 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
                 this.closeEmitter.fire(0);
             };
             this.client.on('tmux-exit', this.tmuxExitListener);
+
+            // Disable automatic-rename so the tab name stays stable; ensure
+            // remain-on-exit is off so the window closes when the shell exits.
+            await this.client.sendCommand(`set-option -w -t ${windowId} automatic-rename off`).catch(() => {});
+            await this.client.sendCommand(`set-option -w -t ${windowId} remain-on-exit off`).catch(() => {});
+
+            if (initialDimensions && this.windowId) {
+                await this.client.resizeWindowForClient(
+                    initialDimensions.columns,
+                    initialDimensions.rows,
+                );
+            }
 
 
 
