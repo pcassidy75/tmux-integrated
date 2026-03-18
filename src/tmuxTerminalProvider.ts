@@ -159,9 +159,8 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
             // Disable automatic-rename so the tab name stays stable.
             await this.client.sendCommand(`set-option -w -t ${windowId} automatic-rename off`).catch(() => {});
 
-            if (initialDimensions && this.paneId) {
-                await this.client.resizePane(
-                    this.paneId,
+            if (initialDimensions && this.windowId) {
+                await this.client.resizeWindowForClient(
                     initialDimensions.columns,
                     initialDimensions.rows,
                 );
@@ -198,13 +197,9 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
     }
 
     setDimensions(dimensions: vscode.TerminalDimensions): void {
-        if (this.paneId) {
-            // Resize the individual pane rather than the shared control
-            // client.  The old resizeWindowForClient (refresh-client -C)
-            // set a single size for ALL windows, so the last terminal to
-            // resize would force its dimensions on every other terminal.
+        if (this.windowId) {
             this.client
-                .resizePane(this.paneId, dimensions.columns, dimensions.rows)
+                .resizeWindowForClient(dimensions.columns, dimensions.rows)
                 .catch((err) => console.error(`tmux-integrated: resize error: ${err}`));
         }
     }

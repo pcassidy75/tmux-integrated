@@ -26,13 +26,6 @@ interface AttachWindowItem extends vscode.QuickPickItem {
     windowIndex: number;
 }
 
-/**
- * Initial control-client dimensions.  Set large so that individual
- * pane resizes (via resize-pane) are not constrained by the client.
- */
-const INITIAL_CLIENT_COLS = 400;
-const INITIAL_CLIENT_ROWS = 200;
-
 let client: TmuxControlClient | null = null;
 let statusBar: vscode.StatusBarItem | null = null;
 let tmuxVersion: string | null = null;
@@ -182,14 +175,6 @@ async function ensureClientConnected(): Promise<boolean> {
         vscode.window.showErrorMessage(`tmux-integrated: Could not connect to tmux: ${err}`);
         return false;
     }
-
-    // Set a large initial control-client size so that individual pane
-    // resizes (via resize-pane) are not constrained by the client
-    // dimensions.  Each TmuxTerminal calls resize-pane with its own
-    // VS Code terminal dimensions.
-    await client.resizeWindowForClient(INITIAL_CLIENT_COLS, INITIAL_CLIENT_ROWS).catch(
-        (err) => console.error(`tmux-integrated: initial client resize error: ${err}`),
-    );
 
     bootstrapWindow = null;
     windowsToAdopt = [];
