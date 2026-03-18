@@ -24,8 +24,20 @@
  */
 
 import { EventEmitter } from 'events';
-import { ChildProcessWithoutNullStreams, spawn } from 'child_process';
+import * as path from 'path';
 import { StringDecoder } from 'string_decoder';
+
+/**
+ * Minimal interface for the node-pty `IPty` object.  We load node-pty at
+ * runtime from VS Code's bundled copy, so we only declare the subset we use.
+ */
+interface IPty {
+    onData: (callback: (data: string) => void) => { dispose(): void };
+    onExit: (callback: (ev: { exitCode: number; signal?: number }) => void) => { dispose(): void };
+    write(data: string): void;
+    kill(signal?: string): void;
+    pid: number;
+}
 
 export interface TmuxPaneOutput {
     paneId: string;
@@ -63,7 +75,7 @@ interface PendingCommand {
 }
 
 export class TmuxControlClient extends EventEmitter {
-    private proc: ChildProcessWithoutNullStreams | null = null;
+    private pty: IPty | null = null;
     private readBuffer = '';
     private responseBuffer: string[] = [];
     private inBlock = false;
@@ -75,8 +87,7 @@ export class TmuxControlClient extends EventEmitter {
     constructor(
         private readonly sessionName: string,
         private readonly tmuxBinaryPath: string,
-        private readonly pythonBinaryPath: string,
-        private readonly ptyBridgePath: string,
+        private readonly appRoot: string,
     ) {
         super();
     }
@@ -105,7 +116,10 @@ export class TmuxControlClient extends EventEmitter {
             (this._version.major === major && this._version.minor >= minor);
     }
 
-    /** Spawn tmux -CC through a PTY bridge so tmux sees a real pseudo-terminal. */
+    /**
+     * Spawn tmux -CC inside a real PTY using node-pty (bundled with VS Code).
+     * This gives tmux the tty it requires without any external dependency.
+     */
     connect(options?: { startDirectory?: string }): Promise<void> {
         return new Promise((resolve, reject) => {
             const tmuxArgs = [
@@ -121,39 +135,37 @@ export class TmuxControlClient extends EventEmitter {
                 tmuxArgs.push('-c', options.startDirectory);
             }
 
-            this.proc = spawn(this.pythonBinaryPath, [this.ptyBridgePath, this.tmuxBinaryPath, ...tmuxArgs], {
+            // node-pty is bundled with VS Code but not on the default
+            // require path for extensions.  Resolve it from VS Code's app root.
+            // eslint-disable-next-line @typescript-eslint/no-var-requires
+            const nodePty = require(path.join(this.appRoot, 'node_modules', 'node-pty')) as {
+                spawn(
+                    file: string,
+                    args: string[],
+                    options: { name?: string; cols?: number; rows?: number; cwd?: string; env?: Record<string, string> },
+                ): IPty;
+            };
+
+            this.pty = nodePty.spawn(this.tmuxBinaryPath, tmuxArgs, {
+                name: 'xterm-256color',
+                cols: 220,
+                rows: 50,
                 cwd: process.cwd(),
-                env: {
-                    ...process.env,
-                    TMUX_INTEGRATED_PTY_COLS: '220',
-                    TMUX_INTEGRATED_PTY_ROWS: '50',
-                },
-                stdio: ['pipe', 'pipe', 'pipe'],
+                env: process.env as Record<string, string>,
             });
 
-            this.proc.stdout.on('data', (chunk: Buffer) => {
-                this.ingest(chunk.toString('latin1'));
+            this.pty.onData((data: string) => {
+                this.ingest(data);
             });
 
-            this.proc.stderr.on('data', (chunk: Buffer) => {
-                const data = chunk.toString('latin1');
-                if (data.includes('%begin') || data.includes('%end') || data.includes('%output')) {
-                    this.ingest(data);
-                }
-            });
-
-            this.proc.on('error', (err) => {
-                reject(new Error(`tmux spawn error: ${err.message}`));
-            });
-
-            this.proc.on('exit', (exitCode, signal) => {
+            this.pty.onExit(({ exitCode }) => {
                 this._connected = false;
-                this.emit('tmux-exit', exitCode, signal);
+                this.emit('tmux-exit', exitCode);
                 for (const cmd of this.pendingQueue) {
                     cmd.reject(new Error('tmux process exited'));
                 }
                 this.pendingQueue = [];
-                this.proc = null;
+                this.pty = null;
             });
 
             const onReady = () => {
@@ -169,7 +181,7 @@ export class TmuxControlClient extends EventEmitter {
             this.once('_ready-error', onReadyError);
 
             setTimeout(() => {
-                if (!this.proc) {
+                if (!this.pty) {
                     this.emit('_ready-error', new Error('tmux process exited before handshake'));
                     return;
                 }
@@ -263,8 +275,9 @@ export class TmuxControlClient extends EventEmitter {
             this.parseExtendedOutput(line);
         } else if (line.startsWith('%window-add ')) {
             this.emit('window-add', line.slice('%window-add '.length).trim());
-        } else if (line.startsWith('%window-close ')) {
-            const windowId = line.slice('%window-close '.length).trim().split(/\s+/u)[0];
+        } else if (line.startsWith('%window-close ') || line.startsWith('%unlinked-window-close ')) {
+            const prefix = line.startsWith('%window-close ') ? '%window-close ' : '%unlinked-window-close ';
+            const windowId = line.slice(prefix.length).trim().split(/\s+/u)[0];
             this.emit('window-close', windowId);
         } else if (line.startsWith('%window-renamed ')) {
             this.emit('window-renamed', parseWindowRenamed(line));
@@ -328,15 +341,12 @@ export class TmuxControlClient extends EventEmitter {
     /** Send a single-line tmux command and return the response lines. */
     sendCommand(command: string): Promise<string[]> {
         return new Promise((resolve, reject) => {
-            if (!this.proc) {
+            if (!this.pty) {
                 reject(new Error('Not connected to tmux'));
                 return;
             }
             this.pendingQueue.push({ resolve, reject });
-            // tmux control mode uses LF as the command terminator.  The
-            // previous \r relied on the PTY line-discipline icrnl flag to
-            // translate CR→LF, which is fragile if terminal settings change.
-            this.proc.stdin.write(command + '\n');
+            this.pty.write(command + '\r');
         });
     }
 
@@ -451,10 +461,8 @@ export class TmuxControlClient extends EventEmitter {
         }
 
         const res = await this.sendCommand(cmd);
-        // Command responses are ingested as latin1 (byte-transparent) for
-        // binary-safe %output parsing.  Re-encode to UTF-8 for text results
-        // so multi-byte characters (e.g. powerline glyphs) survive.
-        return res.map(l => Buffer.from(l, 'latin1').toString('utf8')).join('\n');
+        // With node-pty, response lines are already proper UTF-8 strings.
+        return res.join('\n');
     }
 
     async getPaneCursor(paneId: string): Promise<TmuxPaneCursor> {
@@ -484,17 +492,17 @@ export class TmuxControlClient extends EventEmitter {
     }
 
     disconnect(): void {
-        if (this.proc) {
-            try { this.proc.stdin.write('detach\n'); } catch { /* ignore */ }
-            this.proc.kill();
-            this.proc = null;
+        if (this.pty) {
+            try { this.pty.write('detach\r'); } catch { /* ignore */ }
+            this.pty.kill();
+            this.pty = null;
         }
         this._connected = false;
         this.paneDecoders.clear();
     }
 
     isConnected(): boolean {
-        return this._connected && this.proc !== null;
+        return this._connected && this.pty !== null;
     }
 
     /** Remove the incremental UTF-8 decoder for a closed pane. */
@@ -532,7 +540,14 @@ function decodeOutput(encoded: string): Buffer {
             }
         }
 
-        bytes.push(char.charCodeAt(0));
+        // Encode the character as UTF-8 bytes.  With node-pty, tmux may
+        // pass printable multi-byte characters (e.g. Nerd Font glyphs)
+        // un-escaped — Buffer.from handles them correctly, whereas the
+        // old charCodeAt(0) approach only worked for single-byte chars.
+        const buf = Buffer.from(char, 'utf8');
+        for (const b of buf) {
+            bytes.push(b);
+        }
     }
 
     return Buffer.from(bytes);

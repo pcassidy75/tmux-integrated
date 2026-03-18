@@ -2,7 +2,7 @@
   "name": "tmux-integrated",
   "displayName": "tmux-integrated",
   "description": "Seamless tmux integration for VS Code terminals — persistent sessions, code-command support, and Copilot compatibility",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "publisher": "pcassidy75",
   "license": "GPL-3.0-only",
   "icon": "images/icon.png",
@@ -70,12 +70,16 @@
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "lint": "eslint src --ext ts"
+    "lint": "eslint src --ext ts",
+    "changelog": "conventional-changelog -p angular -i CHANGELOG.md -s",
+    "version": "npm run changelog && git add CHANGELOG.md",
+    "release": "npm version patch && git push --follow-tags"
   },
   "devDependencies": {
     "@types/node": "^18.x",
     "@types/vscode": "^1.80.0",
     "@vscode/vsce": "^3.7.1",
+    "conventional-changelog-cli": "^5.0.0",
     "typescript": "^5.1.0"
   }
 }
