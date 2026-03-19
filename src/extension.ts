@@ -108,7 +108,7 @@ function registerCommands(context: vscode.ExtensionContext): void {
             const connected = await ensureClientConnected();
             if (!connected) { return; }
             const terminal = vscode.window.createTerminal(
-                buildExtensionTerminalOptions(),
+                buildTerminalOptions(),
             );
             terminal.show();
         }),
@@ -154,6 +154,17 @@ async function ensureClientConnected(): Promise<boolean> {
         tmuxBinaryPath!,
         vscode.env.appRoot,
     );
+
+    // Feed the version string so the client can gate features accordingly
+    // (e.g. the -e flag on new-window requires tmux ≥ 3.0).
+    client.setVersion(tmuxVersion!);
+
+    if (!client.versionAtLeast(2, 1)) {
+        setStatus('$(warning) tmux-integrated: unsupported version');
+        vscode.window.showWarningMessage(
+            `tmux-integrated: tmux ${tmuxVersion} may not work correctly. Version 2.1 or later is recommended.`,
+        );
+    }
 
     client.on('tmux-exit', () => setStatus('$(error) tmux-integrated: disconnected'));
 
@@ -201,12 +212,6 @@ async function ensureClientConnected(): Promise<boolean> {
 // Helpers — terminal creation
 // ---------------------------------------------------------------------------
 
-function buildExtensionTerminalOptions(
-    existingWindow?: { windowId: string; paneId: string; windowIndex?: number },
-): vscode.ExtensionTerminalOptions {
-    return buildTerminalOptions(existingWindow);
-}
-
 function buildTerminalOptions(
     existingWindow?: { windowId: string; paneId: string; windowIndex?: number },
 ): vscode.ExtensionTerminalOptions {
@@ -237,7 +242,7 @@ function buildTerminalOptions(
 function buildTerminalProfile(
     existingWindow?: { windowId: string; paneId: string; windowIndex?: number },
 ): vscode.TerminalProfile {
-    return new vscode.TerminalProfile(buildExtensionTerminalOptions(existingWindow));
+    return new vscode.TerminalProfile(buildTerminalOptions(existingWindow));
 }
 
 function takeBootstrapWindow(): { windowId: string; paneId: string; windowIndex: number } | undefined {

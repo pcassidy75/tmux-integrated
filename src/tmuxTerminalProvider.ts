@@ -46,6 +46,14 @@ const KEY_MAP: Record<string, string> = {
     '\x1b[24~': 'F12',
 };
 
+/**
+ * Pre-sorted key sequences: longest first so that multi-byte sequences
+ * (e.g. \x1b[15~) are matched before their single-byte prefixes (\x1b).
+ * Computed once at module load instead of on every keystroke.
+ */
+const SORTED_KEY_SEQUENCES: string[] =
+    Object.keys(KEY_MAP).sort((a, b) => b.length - a.length);
+
 export class TmuxTerminal implements vscode.Pseudoterminal {
     private readonly writeEmitter = new vscode.EventEmitter<string>();
     private readonly closeEmitter = new vscode.EventEmitter<number | void>();
@@ -69,7 +77,6 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
     private outputListener: ((ev: TmuxPaneOutput) => void) | null = null;
     private windowCloseListener: ((id: string) => void) | null = null;
     private tmuxExitListener: (() => void) | null = null;
-    private previousChunkEndedWithCarriageReturn = false;
     private pendingCarriageReturnCount = 0;
     private reconcileTimer: ReturnType<typeof setTimeout> | null = null;
     private lastInputTime = 0;
@@ -222,11 +229,10 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
                 .sendCommand(cmd)
                 .catch((err) => console.error(`tmux-integrated: send-keys error: ${err}`));
 
-        const knownSequences = Object.keys(KEY_MAP).sort((left, right) => right.length - left.length);
         let index = 0;
 
         while (index < data.length) {
-            const sequence = knownSequences.find((candidate) => data.startsWith(candidate, index));
+            const sequence = SORTED_KEY_SEQUENCES.find((candidate) => data.startsWith(candidate, index));
             if (sequence) {
                 send(`send-keys -t ${paneId} "${KEY_MAP[sequence]}"`);
                 index += sequence.length;
@@ -253,7 +259,7 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
                 if (nextChar === '\n' || nextChar.charCodeAt(0) < 0x20) {
                     break;
                 }
-                if (knownSequences.some((candidate) => data.startsWith(candidate, literalEnd))) {
+                if (SORTED_KEY_SEQUENCES.some((candidate) => data.startsWith(candidate, literalEnd))) {
                     break;
                 }
                 literalEnd += 1;
@@ -332,14 +338,12 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
         for (const char of data) {
             if (char === '\r') {
                 this.pendingCarriageReturnCount += 1;
-                this.previousChunkEndedWithCarriageReturn = true;
                 continue;
             }
 
             if (char === '\n') {
                 normalized += '\r\n';
                 this.pendingCarriageReturnCount = 0;
-                this.previousChunkEndedWithCarriageReturn = false;
                 continue;
             }
 
@@ -348,11 +352,7 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
                 this.pendingCarriageReturnCount = 0;
             }
 
-            if (char !== '\n' || !this.previousChunkEndedWithCarriageReturn) {
-                normalized += char;
-            }
-
-            this.previousChunkEndedWithCarriageReturn = char === '\r';
+            normalized += char;
         }
 
         return normalized;
@@ -376,8 +376,14 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
             this.client.removeListener('tmux-exit', this.tmuxExitListener);
             this.tmuxExitListener = null;
         }
+
+        // Free the incremental UTF-8 decoder for this pane so the map in
+        // TmuxControlClient doesn't grow unboundedly over time.
+        if (this.paneId) {
+            this.client.removePaneDecoder(this.paneId);
+        }
+
         this.pendingCarriageReturnCount = 0;
-        this.previousChunkEndedWithCarriageReturn = false;
 
         if (this.windowId && this.attachedWindowNotified) {
             this.lifecycleHooks.onWindowDetached?.(this.windowId);

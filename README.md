@@ -42,7 +42,8 @@ continue where you left off.
 
 ## Requirements
 
-- tmux ≥ 2.0 on the machine where your terminal runs (3.x recommended).
+- tmux ≥ 2.1 on the machine where your terminal runs (3.x recommended for
+  full feature support including per-window environment variables).
   tmux is available on Linux, macOS, and Windows via WSL.
 - If you use VS Code on Windows with **Remote - SSH** or **WSL**, tmux only
   needs to be installed on the remote or WSL side.
@@ -115,7 +116,7 @@ work exactly as they do in a normal VS Code terminal.
 
 | | [wenbo.io approach](https://www.wenbo.io/en-US/Tools/Persistent-VSCode-Remote-Terminals) | **tmux-integrated** |
 |---|---|---|
-| tmux version required | > 3.2 | ≥ 2.0 |
+| tmux version required | > 3.2 | ≥ 2.1 |
 | Requires custom tmux.conf | Yes | No |
 | Copilot compatible | Partial | Yes |
 | `code` command works | No | Yes |
