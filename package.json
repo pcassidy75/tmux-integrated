@@ -71,7 +71,7 @@
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "lint": "eslint src --ext ts",
-    "changelog": "conventional-changelog -p angular -i CHANGELOG.md -s",
+    "changelog": "node scripts/update-changelog.js",
     "version": "npm run changelog && git add CHANGELOG.md",
     "release": "npm version patch && git push --follow-tags"
   },
@@ -79,7 +79,6 @@
     "@types/node": "^18.x",
     "@types/vscode": "^1.80.0",
     "@vscode/vsce": "^3.7.1",
-    "conventional-changelog-cli": "^5.0.0",
     "typescript": "^5.1.0"
   }
 }
