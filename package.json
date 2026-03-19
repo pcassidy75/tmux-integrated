@@ -2,7 +2,7 @@
   "name": "tmux-integrated",
   "displayName": "tmux-integrated",
   "description": "Seamless tmux integration for VS Code terminals — persistent sessions, code-command support, and Copilot compatibility",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "publisher": "pcassidy75",
   "license": "GPL-3.0-only",
   "icon": "images/icon.png",

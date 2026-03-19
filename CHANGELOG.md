@@ -1,3 +1,4 @@
+## [0.1.3](https://github.com/pcassidy75/tmux-integrated/compare/v0.1.2...v0.1.3) (2026-03-19)
 # Changelog
 
 All notable changes to this project will be documented in this file.
