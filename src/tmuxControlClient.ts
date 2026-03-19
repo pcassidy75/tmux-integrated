@@ -367,14 +367,10 @@ export class TmuxControlClient extends EventEmitter {
         if (options.startDirectory) {
             cmd += ` -c ${shellescape(options.startDirectory)}`;
         }
-        // The -e flag for per-window environment variables requires tmux ≥ 3.0.
-        // On older versions the session-level environment (set via
-        // updateEnvironment) is inherited automatically.
-        if (options.env && this.versionAtLeast(3, 0)) {
-            for (const [k, v] of Object.entries(options.env)) {
-                cmd += ` -e ${shellescape(`${k}=${v}`)}`;
-            }
-        }
+        // Per-window environment via -e is intentionally disabled for
+        // compatibility with older tmux versions. New windows inherit the
+        // session environment set through updateEnvironment.
+        void options.env;
         if (options.shell) {
             cmd += ` ${shellescape(options.shell)}`;
         }
@@ -427,11 +423,10 @@ export class TmuxControlClient extends EventEmitter {
         if (options.startDirectory) {
             cmd += ` -c ${shellescape(options.startDirectory)}`;
         }
-        if (options.env && this.versionAtLeast(3, 0)) {
-            for (const [key, value] of Object.entries(options.env)) {
-                cmd += ` -e ${shellescape(`${key}=${value}`)}`;
-            }
-        }
+        // Per-pane respawn environment via -e is intentionally disabled for
+        // compatibility with older tmux versions. Respawned panes inherit the
+        // session environment set through updateEnvironment.
+        void options.env;
         if (options.shell) {
             cmd += ` ${shellescape(options.shell)}`;
         }
