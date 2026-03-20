@@ -44,6 +44,7 @@ interface IPty {
     onData: (callback: (data: string) => void) => { dispose(): void };
     onExit: (callback: (ev: { exitCode: number; signal?: number }) => void) => { dispose(): void };
     write(data: string): void;
+    resize(cols: number, rows: number): void;
     kill(signal?: string): void;
     pid: number;
 }
@@ -338,16 +339,39 @@ export class TmuxControlClient extends EventEmitter {
         await this.sendCommand(`resize-pane -t ${paneId} -x ${cols} -y ${rows}`);
     }
 
+    /**
+     * Resize the underlying PTY and the tmux client to match the VS Code
+     * terminal dimensions.  Like iTerm2, we update both:
+     *   1. The PTY dimensions (TIOCSWINSZ → SIGWINCH to tmux)
+     *   2. The tmux client size via `refresh-client -C` (control-mode override)
+     * This keeps `tmux list-clients` in sync with the actual terminal size.
+     *
+     * `refresh-client -C` has been available since tmux 2.1 for control-mode
+     * clients.  iTerm2 uses it unconditionally (with error tolerance).
+     */
     async resizeWindowForClient(cols: number, rows: number): Promise<void> {
-        if (this.versionAtLeast(2, 9)) {
-            await this.sendCommand(`refresh-client -C ${cols}x${rows}`);
-        } else {
-            // tmux < 2.9 does not support refresh-client -C.
-            // Fall back to force-resizing the current window's active pane.
-            await this.sendCommand(`resize-window -x ${cols} -y ${rows}`).catch(() => {
-                // resize-window was added in tmux 2.9 as well; on truly old
-                // versions just skip the resize — tmux will use its default.
-            });
+        // Resize the node-pty so tmux sees the updated client size.
+        this.resizePty(cols, rows);
+
+        // refresh-client -C sets the control-mode client size.  Available
+        // since tmux 2.1; tolerates errors on truly ancient builds.
+        await this.sendCommand(
+            `refresh-client -C ${cols},${rows}`,
+            CommandFlags.TolerateErrors,
+        );
+    }
+
+    /**
+     * Resize the underlying PTY.  This sends TIOCSWINSZ to the tmux
+     * control-mode process so it updates its internal client size.
+     */
+    private resizePty(cols: number, rows: number): void {
+        if (this.pty) {
+            try {
+                this.pty.resize(cols, rows);
+            } catch {
+                // Ignore resize errors — the PTY may not support it.
+            }
         }
     }
 

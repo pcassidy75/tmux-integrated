@@ -78,6 +78,7 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
     private windowCloseListener: ((id: string) => void) | null = null;
     private tmuxExitListener: (() => void) | null = null;
     private pendingCarriageReturnCount = 0;
+    private resizeTimer: ReturnType<typeof setTimeout> | null = null;
     private readonly log: (message: string) => void;
 
     constructor(
@@ -212,9 +213,18 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
 
     setDimensions(dimensions: vscode.TerminalDimensions): void {
         if (this.windowId) {
-            this.client
-                .resizeWindowForClient(dimensions.columns, dimensions.rows)
-                .catch((err) => console.error(`tmux-integrated: resize error: ${err}`));
+            // Debounce rapid resize events (e.g. during window drag) to avoid
+            // flooding tmux with resize commands.
+            if (this.resizeTimer) {
+                clearTimeout(this.resizeTimer);
+            }
+            this.resizeTimer = setTimeout(() => {
+                this.resizeTimer = null;
+                this.log(`setDimensions: ${dimensions.columns}x${dimensions.rows} for window ${this.windowId}`);
+                this.client
+                    .resizeWindowForClient(dimensions.columns, dimensions.rows)
+                    .catch((err) => this.log(`resize error: ${err}`));
+            }, 100);
         }
     }
 
@@ -313,6 +323,10 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
     }
 
     private cleanup(): void {
+        if (this.resizeTimer) {
+            clearTimeout(this.resizeTimer);
+            this.resizeTimer = null;
+        }
         if (this.outputListener) {
             this.client.removeListener('output', this.outputListener);
             this.outputListener = null;
