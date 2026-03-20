@@ -117,6 +117,38 @@ export class TmuxControlClient extends EventEmitter {
     }
 
     /**
+     * Locate VS Code's bundled node-pty.  The exact path varies between local
+     * and remote (SSH / WSL / tunnel) installs and across VS Code versions:
+     *   • node_modules/node-pty              — older, local installs
+     *   • node_modules.asar.unpacked/node-pty — native modules extracted from asar
+     *   • node_modules/@vscode/node-pty       — scoped package in recent builds
+     *   • node_modules.asar.unpacked/@vscode/node-pty
+     */
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    private requireNodePty(): any {
+        const candidates = [
+            path.join(this.appRoot, 'node_modules', 'node-pty'),
+            path.join(this.appRoot, 'node_modules.asar.unpacked', 'node-pty'),
+            path.join(this.appRoot, 'node_modules', '@vscode', 'node-pty'),
+            path.join(this.appRoot, 'node_modules.asar.unpacked', '@vscode', 'node-pty'),
+        ];
+
+        for (const candidate of candidates) {
+            try {
+                // eslint-disable-next-line @typescript-eslint/no-var-requires
+                return require(candidate);
+            } catch {
+                // Try the next candidate.
+            }
+        }
+
+        throw new Error(
+            `node-pty not found in VS Code installation (appRoot: ${this.appRoot}). ` +
+            `Searched: ${candidates.join(', ')}`,
+        );
+    }
+
+    /**
      * Spawn tmux -CC inside a real PTY using node-pty (bundled with VS Code).
      * This gives tmux the tty it requires without any external dependency.
      */
@@ -135,10 +167,10 @@ export class TmuxControlClient extends EventEmitter {
                 tmuxArgs.push('-c', options.startDirectory);
             }
 
-            // node-pty is bundled with VS Code but not on the default
-            // require path for extensions.  Resolve it from VS Code's app root.
-            // eslint-disable-next-line @typescript-eslint/no-var-requires
-            const nodePty = require(path.join(this.appRoot, 'node_modules', 'node-pty')) as {
+            // node-pty is bundled with VS Code but the exact location
+            // differs between local and remote (SSH) installs and across
+            // VS Code versions.  Try several known paths.
+            const nodePty = this.requireNodePty() as {
                 spawn(
                     file: string,
                     args: string[],
@@ -150,7 +182,7 @@ export class TmuxControlClient extends EventEmitter {
                 name: 'xterm-256color',
                 cols: 220,
                 rows: 50,
-                cwd: process.cwd(),
+                cwd: options?.startDirectory || process.env.HOME || process.cwd(),
                 env: process.env as Record<string, string>,
             });
 
@@ -180,27 +212,32 @@ export class TmuxControlClient extends EventEmitter {
             this.once('_ready', onReady);
             this.once('_ready-error', onReadyError);
 
-            setTimeout(() => {
-                if (!this.pty) {
-                    this.emit('_ready-error', new Error('tmux process exited before handshake'));
-                    return;
-                }
+            // The initial %begin/%end block from tmux signals that control
+            // mode is alive.  Only AFTER that block is consumed do we send
+            // the readiness probe — otherwise the initial block and the
+            // probe response can race (the initial %end dequeues the probe
+            // command and resolves it with empty output, causing a spurious
+            // "Unexpected tmux readiness response" error on slower hosts).
+            this.once('_initial-handshake', () => {
                 this.sendCommand('display-message -p "__tmux_integrated_ready__"')
                     .then((lines) => {
                         if (lines[0]?.trim() === '__tmux_integrated_ready__') {
                             this.emit('_ready');
                             return;
                         }
-                        this.emit('_ready-error', new Error('Unexpected tmux readiness response'));
+                        this.emit('_ready-error', new Error(
+                            `Unexpected tmux readiness response: ${JSON.stringify(lines)}`,
+                        ));
                     })
                     .catch((err) => {
                         this.emit('_ready-error', err instanceof Error ? err : new Error(String(err)));
                     });
-            }, 50);
+            });
 
             const timer = setTimeout(() => {
                 this.removeListener('_ready', onReady);
                 this.removeListener('_ready-error', onReadyError);
+                this.removeListener('_initial-handshake', () => {});
                 if (!this._connected) {
                     reject(new Error('Timed out waiting for tmux control mode handshake'));
                 }
@@ -245,8 +282,10 @@ export class TmuxControlClient extends EventEmitter {
             if (cmd) {
                 cmd.resolve(this.responseBuffer.slice());
             } else if (!this._connected) {
-                // The very first %end signals that tmux is ready.
-                this.emit('_ready');
+                // The very first %end (with no pending command) signals that
+                // tmux control mode is alive.  Emit a separate event so the
+                // connect() method can now safely send the readiness probe.
+                this.emit('_initial-handshake');
             }
             this.responseBuffer = [];
         } else if (line.startsWith('%error')) {
@@ -394,7 +433,16 @@ export class TmuxControlClient extends EventEmitter {
     }
 
     async resizeWindowForClient(cols: number, rows: number): Promise<void> {
-        await this.sendCommand(`refresh-client -C ${cols}x${rows}`);
+        if (this.versionAtLeast(2, 9)) {
+            await this.sendCommand(`refresh-client -C ${cols}x${rows}`);
+        } else {
+            // tmux < 2.9 does not support refresh-client -C.
+            // Fall back to force-resizing the current window's active pane.
+            await this.sendCommand(`resize-window -x ${cols} -y ${rows}`).catch(() => {
+                // resize-window was added in tmux 2.9 as well; on truly old
+                // versions just skip the resize — tmux will use its default.
+            });
+        }
     }
 
     async killWindow(windowId: string): Promise<void> {

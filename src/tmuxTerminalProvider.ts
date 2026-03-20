@@ -80,6 +80,7 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
     private pendingCarriageReturnCount = 0;
     private reconcileTimer: ReturnType<typeof setTimeout> | null = null;
     private lastInputTime = 0;
+    private readonly log: (message: string) => void;
 
     constructor(
         private readonly client: TmuxControlClient,
@@ -93,10 +94,12 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
             onWindowAttachFailed?: (windowId: string) => void;
         },
         isDeactivating?: () => boolean,
+        log?: (message: string) => void,
     ) {
         this.existingWindow = existingWindow ?? null;
         this.isDeactivating = isDeactivating ?? (() => false);
         this.lifecycleHooks = lifecycleHooks ?? {};
+        this.log = log ?? (() => {});
     }
 
     // -----------------------------------------------------------------------
@@ -105,13 +108,26 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
 
     async open(initialDimensions: vscode.TerminalDimensions | undefined): Promise<void> {
         try {
-            const targetWindow = this.existingWindow ?? await this.client.newWindow({
-                startDirectory: this.startDirectory,
-                cols: initialDimensions?.columns,
-                rows: initialDimensions?.rows,
-                env: this.extraEnv,
-                shell: this.shell,
-            });
+            this.log(`open() called: existingWindow=${JSON.stringify(this.existingWindow)}, dims=${initialDimensions?.columns}x${initialDimensions?.rows}, shell=${this.shell}, clientConnected=${this.client.isConnected()}`);
+            let targetWindow: { windowId: string; paneId: string; windowIndex?: number };
+            if (this.existingWindow) {
+                targetWindow = this.existingWindow;
+                this.log(`open(): reusing existing window ${targetWindow.windowId}`);
+            } else {
+                this.log('open(): creating new tmux window...');
+                const newWindowPromise = this.client.newWindow({
+                    startDirectory: this.startDirectory,
+                    cols: initialDimensions?.columns,
+                    rows: initialDimensions?.rows,
+                    env: this.extraEnv,
+                    shell: this.shell,
+                });
+                const timeoutPromise = new Promise<never>((_, reject) =>
+                    setTimeout(() => reject(new Error('Timed out waiting for tmux new-window response (15s)')), 15_000),
+                );
+                targetWindow = await Promise.race([newWindowPromise, timeoutPromise]);
+                this.log(`open(): new window created: ${JSON.stringify(targetWindow)}`);
+            }
             const { windowId, paneId } = targetWindow;
             const windowIndex = 'windowIndex' in targetWindow
                 ? (targetWindow as { windowIndex: number }).windowIndex
@@ -163,7 +179,7 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
                 await this.client.resizeWindowForClient(
                     initialDimensions.columns,
                     initialDimensions.rows,
-                );
+                ).catch((err) => this.log(`resize warning (non-fatal): ${err}`));
             }
 
 
@@ -181,6 +197,7 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
             }
 
         } catch (err) {
+            this.log(`open() ERROR: ${err}`);
             if (this.existingWindow?.windowId) {
                 this.lifecycleHooks.onWindowAttachFailed?.(this.existingWindow.windowId);
             }

@@ -1,10 +1,17 @@
-## [0.1.3](https://github.com/pcassidy75/tmux-integrated/compare/v0.1.2...v0.1.3) (2026-03-19)
 # Changelog
 
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [0.1.4] - 2026-03-20
+
+### Fixed
+
+- Removed dependency on tmux 3.x+ features allowing tmux 2.x to work
+
+## [0.1.3](https://github.com/pcassidy75/tmux-integrated/compare/v0.1.2...v0.1.3) (2026-03-19)
 
 ## [0.1.2] - 2025-03-18
 
