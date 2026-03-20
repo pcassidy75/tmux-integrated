@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Removed dependency on tmux 3.x+ features allowing tmux 2.x to work
+- Fixed scrolling
+- Fixed resizing
 
 ## [0.1.3](https://github.com/pcassidy75/tmux-integrated/compare/v0.1.2...v0.1.3) (2026-03-19)
 
