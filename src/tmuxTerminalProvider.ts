@@ -78,8 +78,6 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
     private windowCloseListener: ((id: string) => void) | null = null;
     private tmuxExitListener: (() => void) | null = null;
     private pendingCarriageReturnCount = 0;
-    private reconcileTimer: ReturnType<typeof setTimeout> | null = null;
-    private lastInputTime = 0;
     private readonly log: (message: string) => void;
 
     constructor(
@@ -147,7 +145,6 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
             this.outputListener = ({ paneId: id, data }: TmuxPaneOutput) => {
                 if (id === this.paneId) {
                     this.writeEmitter.fire(this.normalizeTerminalOutput(data));
-                    this.scheduleReconciliation();
                 }
             };
             this.client.on('output', this.outputListener);
@@ -185,9 +182,11 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
 
 
             if (this.existingWindow) {
-                // Seed the renderer with the current visible pane contents.
+                // Seed the renderer with the full scrollback + visible pane
+                // contents so the user can scroll up through prior history.
                 const snapshot = await this.client.capturePane(paneId, {
                     includeEscapeSequences: true,
+                    startLine: '-',
                 });
                 const cursor = await this.client.getPaneCursor(paneId);
                 if (snapshot) {
@@ -208,8 +207,6 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
 
     handleInput(data: string): void {
         if (!this.paneId) { return; }
-
-        this.lastInputTime = Date.now();
         this.sendKeysInput(data);
     }
 
@@ -289,66 +286,6 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
         }
     }
 
-    // -----------------------------------------------------------------------
-    // Post-input reconciliation
-    // -----------------------------------------------------------------------
-
-    /** How long to wait after the last %output before reconciling (ms). */
-    private static readonly RECONCILE_DEBOUNCE_MS = 80;
-
-    /** Only reconcile if user input was sent within this window (ms). */
-    private static readonly RECONCILE_INPUT_WINDOW_MS = 500;
-
-    /**
-     * Schedule a debounced screen reconciliation.  Only fires when the user
-     * recently sent input — avoids flicker during pure output streaming
-     * (e.g. long-running build output).
-     */
-    private scheduleReconciliation(): void {
-        if (Date.now() - this.lastInputTime > TmuxTerminal.RECONCILE_INPUT_WINDOW_MS) {
-            return;
-        }
-
-        if (this.reconcileTimer) {
-            clearTimeout(this.reconcileTimer);
-        }
-
-        this.reconcileTimer = setTimeout(() => {
-            this.reconcileTimer = null;
-            this.reconcile();
-        }, TmuxTerminal.RECONCILE_DEBOUNCE_MS);
-    }
-
-    /**
-     * Reconcile the VS Code terminal with tmux's authoritative screen state.
-     * Runs capture-pane to get the fully-composed visible screen, then clears
-     * and rewrites the terminal to eliminate echo/redraw artifacts.
-     */
-    private async reconcile(): Promise<void> {
-        if (!this.paneId) { return; }
-
-        try {
-            const [snapshot, cursor] = await Promise.all([
-                this.client.capturePane(this.paneId, { includeEscapeSequences: true }),
-                this.client.getPaneCursor(this.paneId),
-            ]);
-
-            // Clear the visible screen and rewrite from the authoritative snapshot.
-            // capture-pane output is clean screen state — convert \n → \r\n
-            // directly instead of running through normalizeTerminalOutput
-            // (which tracks CR state across incremental %output chunks).
-            this.writeEmitter.fire('\x1b[H\x1b[2J');
-
-            if (snapshot) {
-                this.writeEmitter.fire(snapshot.replace(/\n/g, '\r\n'));
-            }
-
-            this.writeEmitter.fire(`\x1b[${cursor.y + 1};${cursor.x + 1}H`);
-        } catch {
-            // Reconciliation is best-effort; don't crash on transient errors.
-        }
-    }
-
     private normalizeTerminalOutput(data: string): string {
         let normalized = '';
 
@@ -376,10 +313,6 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
     }
 
     private cleanup(): void {
-        if (this.reconcileTimer) {
-            clearTimeout(this.reconcileTimer);
-            this.reconcileTimer = null;
-        }
         if (this.outputListener) {
             this.client.removeListener('output', this.outputListener);
             this.outputListener = null;

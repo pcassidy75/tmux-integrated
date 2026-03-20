@@ -7,16 +7,19 @@ After a deep analysis of iTerm2's tmux integration — `TmuxGateway` (~1250 line
 ### Phase 1: Architecture & Protocol Hardening
 
 1. **Separate Gateway from Controller** — iTerm2 cleanly separates `TmuxGateway` (protocol parsing, `%begin/%end` handling, command queuing) from `TmuxController` (business logic, window management). Currently `TmuxControlClient` conflates both roles. Extract a `TmuxGateway` class.
-   - New `src/tmuxGateway.ts`, refactor `src/tmuxControlClient.ts`
+   - New `src/tmuxGateway.ts`, refactor `src/tmuxControlClient.ts` - **DONE**
 
 2. **Command flags & error tolerance** — iTerm2's gateway supports `kTmuxGatewayCommandShouldTolerateErrors` (callback still runs on error with `nil`), `kTmuxGatewayCommandWantsData` (receive raw `NSData` not `NSString`), and `kTmuxGatewayCommandOfferToDetachIfLaggyDuplicate`. Currently all errors reject the promise and kill the flow.
-   - `src/tmuxControlClient.ts`
+   - `src/tmuxControlClient.ts` - **DONE**
 
 3. **Command batching (`sendCommandList`)** — iTerm2 joins commands with `;` and sends as one line, tracking which responses belong to the same list. Used for atomic multi-step operations (resize + list-windows, split + list-panes). tmux-integrated sends commands one-at-a-time.
-   - `src/tmuxControlClient.ts`
+   - `src/tmuxControlClient.ts` - **DONE**
 
 4. **Write queuing** — iTerm2 defers all writes until `%session-changed` is received, preventing races during init. tmux-integrated sends immediately after the initial handshake.
-   - `src/tmuxControlClient.ts`
+   - `src/tmuxControlClient.ts` - **DONE**
+
+5. **Remove reconciliation mechanism** — The post-input reconciliation (`scheduleReconciliation` / `reconcile`) clears the VS Code terminal with `\x1b[H\x1b[2J` and rewrites it from a `capture-pane` snapshot every ~80ms after user input. In xterm.js, `\x1b[2J` pushes the current visible content into the scrollback buffer before blanking, so every reconciliation cycle duplicates the visible screen into scrollback. When the user scrolls up, the same lines repeat in a loop. iTerm2 does not reconcile — it trusts its VT100 parser to stay in sync with tmux `%output`. Remove reconciliation entirely and trust xterm.js the same way.
+   - `src/tmuxTerminalProvider.ts` — **DONE**
 
 ### Phase 2: Version Detection & Compatibility
 
@@ -71,7 +74,7 @@ After a deep analysis of iTerm2's tmux integration — `TmuxGateway` (~1250 line
 
 20. **OSC 52 clipboard queries (tmux 3.6+)** — Low priority.
 
-21. **Scrollback history capture** — Use `capture-pane -S -` (full history) instead of just the visible screen when adopting windows.
+21. **Scrollback history capture** — Use `capture-pane -S -` (full history) instead of just the visible screen when adopting windows. — **DONE** (adoption in `open()` now uses `startLine: '-'`)
 
 ---
 
