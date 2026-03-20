@@ -340,39 +340,24 @@ export class TmuxControlClient extends EventEmitter {
     }
 
     /**
-     * Resize the underlying PTY and the tmux client to match the VS Code
-     * terminal dimensions.  Like iTerm2, we update both:
-     *   1. The PTY dimensions (TIOCSWINSZ → SIGWINCH to tmux)
-     *   2. The tmux client size via `refresh-client -C` (control-mode override)
-     * This keeps `tmux list-clients` in sync with the actual terminal size.
+     * Resize the tmux client to match the VS Code terminal dimensions.
      *
-     * `refresh-client -C` has been available since tmux 2.1 for control-mode
-     * clients.  iTerm2 uses it unconditionally (with error tolerance).
+     * Uses only `refresh-client -C` (available since tmux 2.1) to set the
+     * control-mode client size.  The underlying control-channel PTY is kept
+     * at its initial large size (220 cols) so that tmux protocol lines
+     * (which can be very long for complex zsh prompts) are never affected
+     * by PTY output processing.
+     *
+     * iTerm2 similarly relies on `refresh-client -C` for sizing without
+     * resizing the control channel PTY to match each pane.
      */
     async resizeWindowForClient(cols: number, rows: number): Promise<void> {
-        // Resize the node-pty so tmux sees the updated client size.
-        this.resizePty(cols, rows);
-
         // refresh-client -C sets the control-mode client size.  Available
         // since tmux 2.1; tolerates errors on truly ancient builds.
         await this.sendCommand(
             `refresh-client -C ${cols},${rows}`,
             CommandFlags.TolerateErrors,
         );
-    }
-
-    /**
-     * Resize the underlying PTY.  This sends TIOCSWINSZ to the tmux
-     * control-mode process so it updates its internal client size.
-     */
-    private resizePty(cols: number, rows: number): void {
-        if (this.pty) {
-            try {
-                this.pty.resize(cols, rows);
-            } catch {
-                // Ignore resize errors — the PTY may not support it.
-            }
-        }
     }
 
     async killWindow(windowId: string): Promise<void> {

@@ -47,10 +47,26 @@ const KEY_MAP: Record<string, string> = {
 };
 
 /**
- * Pre-sorted key sequences: longest first so that multi-byte sequences
- * (e.g. \x1b[15~) are matched before their single-byte prefixes (\x1b).
- * Computed once at module load instead of on every keystroke.
+ * Characters that can be sent safely via `send-keys -lt` (literal mode)
+ * without tmux's command parser interpreting them.  Matches iTerm2's
+ * `canSendAsLiteralCharacter:` in TmuxGateway.m — only alphanumerics
+ * and a handful of punctuation known to be safe.
+ *
+ * Everything else (`;`, `$`, `#`, `"`, `'`, spaces, etc.) must be sent
+ * as hex code points via `send-keys -t … 0xNN` to bypass the parser.
  */
+function canSendAsLiteral(codePoint: number): boolean {
+    if (codePoint >= 0x30 && codePoint <= 0x39) { return true; }   // 0-9
+    if (codePoint >= 0x41 && codePoint <= 0x5a) { return true; }   // A-Z
+    if (codePoint >= 0x61 && codePoint <= 0x7a) { return true; }   // a-z
+    // Same safe punctuation as iTerm2: + / ) : , _
+    return codePoint === 0x2b  // +
+        || codePoint === 0x2f  // /
+        || codePoint === 0x29  // )
+        || codePoint === 0x3a  // :
+        || codePoint === 0x2c  // ,
+        || codePoint === 0x5f; // _
+}
 const SORTED_KEY_SEQUENCES: string[] =
     Object.keys(KEY_MAP).sort((a, b) => b.length - a.length);
 
@@ -77,7 +93,7 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
     private outputListener: ((ev: TmuxPaneOutput) => void) | null = null;
     private windowCloseListener: ((id: string) => void) | null = null;
     private tmuxExitListener: (() => void) | null = null;
-    private pendingCarriageReturnCount = 0;
+    private lastCharWasCR = false;
     private resizeTimer: ReturnType<typeof setTimeout> | null = null;
     private readonly log: (message: string) => void;
 
@@ -241,85 +257,120 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
     // -----------------------------------------------------------------------
 
     /**
-     * Maps known escape sequences to tmux key names and sends any remaining
-     * literal text with `send-keys -l`.
+     * Send input to the tmux pane using the iTerm2 hybrid strategy:
+     *   - Known escape sequences → `send-keys -t <pane> <KeyName>`
+     *   - Safe literal runs     → `send-keys -lt <pane> <chars>`
+     *   - Everything else       → `send-keys -t <pane> 0xNN 0xNN …`
+     *
+     * Multiple commands are batched into a single `sendCommandList` call
+     * (joined with ` ; `) to reduce PTY round-trips, matching iTerm2.
      */
     private sendKeysInput(data: string): void {
         if (!this.paneId) { return; }
 
         const paneId = this.paneId;
-        const send = (cmd: string) =>
-            this.client
-                .sendCommand(cmd)
-                .catch((err) => console.error(`tmux-integrated: send-keys error: ${err}`));
+        const commands: string[] = [];
 
         let index = 0;
 
         while (index < data.length) {
+            // 1. Check for known escape sequences (function keys, arrows, etc.)
             const sequence = SORTED_KEY_SEQUENCES.find((candidate) => data.startsWith(candidate, index));
             if (sequence) {
-                send(`send-keys -t ${paneId} "${KEY_MAP[sequence]}"`);
+                commands.push(`send-keys -t ${paneId} ${KEY_MAP[sequence]}`);
                 index += sequence.length;
                 continue;
             }
 
             const char = data[index];
+
+            // 2. Bare \n → Enter
             if (char === '\n') {
-                send(`send-keys -t ${paneId} "Enter"`);
+                commands.push(`send-keys -t ${paneId} Enter`);
                 index += 1;
                 continue;
             }
 
+            // 3. Control characters (< 0x20) → C-x key names
             if (char.charCodeAt(0) < 0x20) {
                 const letter = String.fromCharCode(char.charCodeAt(0) + 64).toLowerCase();
-                send(`send-keys -t ${paneId} "C-${letter}"`);
+                commands.push(`send-keys -t ${paneId} C-${letter}`);
                 index += 1;
                 continue;
             }
 
-            let literalEnd = index + 1;
-            while (literalEnd < data.length) {
-                const nextChar = data[literalEnd];
-                if (nextChar === '\n' || nextChar.charCodeAt(0) < 0x20) {
-                    break;
+            // 4. Collect a run of printable characters.  Classify each as
+            //    "safe literal" or "needs hex".  Build runs of the same kind.
+            const cp = char.charCodeAt(0);
+            if (canSendAsLiteral(cp)) {
+                // Collect consecutive safe-literal characters.
+                let litEnd = index + 1;
+                while (litEnd < data.length) {
+                    const nextCp = data.charCodeAt(litEnd);
+                    if (nextCp < 0x20 || !canSendAsLiteral(nextCp)) { break; }
+                    if (SORTED_KEY_SEQUENCES.some((s) => data.startsWith(s, litEnd))) { break; }
+                    litEnd++;
                 }
-                if (SORTED_KEY_SEQUENCES.some((candidate) => data.startsWith(candidate, literalEnd))) {
-                    break;
+                const run = data.slice(index, litEnd);
+                commands.push(`send-keys -lt ${paneId} ${run}`);
+                index = litEnd;
+            } else {
+                // Collect consecutive hex characters (anything not safe-literal
+                // and not a control char or escape sequence).
+                const hexCodes: string[] = [];
+                let hexEnd = index;
+                while (hexEnd < data.length) {
+                    const nextCp = data.charCodeAt(hexEnd);
+                    if (nextCp < 0x20) { break; }
+                    if (canSendAsLiteral(nextCp)) { break; }
+                    if (SORTED_KEY_SEQUENCES.some((s) => data.startsWith(s, hexEnd))) { break; }
+                    // Encode as UTF-8 bytes in hex.
+                    const buf = Buffer.from(data[hexEnd], 'utf8');
+                    for (const b of buf) {
+                        hexCodes.push(`0x${b.toString(16).padStart(2, '0')}`);
+                    }
+                    hexEnd++;
                 }
-                literalEnd += 1;
+                if (hexCodes.length > 0) {
+                    commands.push(`send-keys -t ${paneId} ${hexCodes.join(' ')}`);
+                }
+                index = hexEnd;
             }
+        }
 
-            const literal = data.slice(index, literalEnd);
-            const escaped = literal.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-            send(`send-keys -t ${paneId} -l "${escaped}"`);
-            index = literalEnd;
+        if (commands.length > 0) {
+            this.client
+                .sendCommandList(commands, 0)
+                .catch((err) => console.error(`tmux-integrated: send input error: ${err}`));
         }
     }
 
+    /**
+     * Normalise decoded tmux pane output for xterm.js:
+     *   1. Strip screen/tmux title sequences (\ek…\e\\) that xterm.js doesn't
+     *      understand.  oh-my-zsh's termsupport.zsh emits these in preexec and
+     *      precmd when TERM matches screen* or tmux*.  xterm.js treats \ek as
+     *      an unknown two-char escape and prints the enclosed text as visible
+     *      characters, producing the "command echo" effect.
+     *   2. Ensure bare LF is preceded by CR (xterm.js requirement).
+     */
     private normalizeTerminalOutput(data: string): string {
-        let normalized = '';
+        // Strip \ek<text>\e\\ — screen/tmux hardstatus title sequence.
+        data = data.replace(/\x1bk[^\x1b]*\x1b\\/g, '');
 
-        for (const char of data) {
-            if (char === '\r') {
-                this.pendingCarriageReturnCount += 1;
-                continue;
+        let result = '';
+
+        for (let i = 0; i < data.length; i++) {
+            const ch = data[i];
+            if (ch === '\n' && !this.lastCharWasCR) {
+                result += '\r\n';
+            } else {
+                result += ch;
             }
-
-            if (char === '\n') {
-                normalized += '\r\n';
-                this.pendingCarriageReturnCount = 0;
-                continue;
-            }
-
-            if (this.pendingCarriageReturnCount > 0) {
-                normalized += '\r'.repeat(this.pendingCarriageReturnCount);
-                this.pendingCarriageReturnCount = 0;
-            }
-
-            normalized += char;
+            this.lastCharWasCR = (ch === '\r');
         }
 
-        return normalized;
+        return result;
     }
 
     private cleanup(): void {
@@ -347,7 +398,7 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
             this.client.removePaneDecoder(this.paneId);
         }
 
-        this.pendingCarriageReturnCount = 0;
+        this.lastCharWasCR = false;
 
         if (this.windowId && this.attachedWindowNotified) {
             this.lifecycleHooks.onWindowDetached?.(this.windowId);

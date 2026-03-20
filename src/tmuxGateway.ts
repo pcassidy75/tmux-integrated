@@ -70,6 +70,7 @@ interface PendingCommand {
     reject: (err: Error) => void;
 }
 
+
 // ---------------------------------------------------------------------------
 // TmuxGateway
 // ---------------------------------------------------------------------------
@@ -340,12 +341,27 @@ export class TmuxGateway extends EventEmitter {
     }
 
     private parseExtendedOutput(line: string): void {
-        const match = /^%extended-output\s+(%\S+)\s+(\d+)\s+(?:.*?\s+)?:\s?(.*)$/u.exec(line);
-        if (!match) {
+        const rest = line.slice('%extended-output '.length);
+        const firstSpace = rest.indexOf(' ');
+        if (firstSpace === -1) {
             return;
         }
 
-        const [, paneId, , encoded] = match;
+        const paneId = rest.slice(0, firstSpace);
+        if (!paneId.startsWith('%')) {
+            return;
+        }
+
+        const colonIndex = rest.indexOf(':');
+        if (colonIndex === -1) {
+            return;
+        }
+
+        let encoded = rest.slice(colonIndex + 1);
+        if (encoded.startsWith(' ')) {
+            encoded = encoded.slice(1);
+        }
+
         const data = this.decodePaneOutput(paneId, encoded);
         this.emit('output', { paneId, data } as TmuxPaneOutput);
     }
@@ -359,31 +375,65 @@ export class TmuxGateway extends EventEmitter {
 
         return decoder.write(decodeOutput(encoded));
     }
+
 }
 
 // ---------------------------------------------------------------------------
 // Module-level helpers
 // ---------------------------------------------------------------------------
 
-/** Decode data from a tmux %output or %extended-output notification. */
+/**
+ * Decode data from a tmux %output or %extended-output notification.
+ *
+ * Matches iTerm2's `decodeEscapedOutput:` (TmuxGateway.m):
+ *   - Bare control characters (< 0x20) are silently skipped.  tmux always
+ *     octal-encodes control bytes; bare ones are artefacts injected by the
+ *     PTY line driver (e.g. ONLCR converting \n → \r\n).
+ *   - Within an octal escape (\NNN), bare \r characters added by the line
+ *     driver are ignored, matching iTerm2's comment: "Ignore \r's that the
+ *     line driver sprinkles in at its pleasure."
+ */
 function decodeOutput(encoded: string): Buffer {
     const bytes: number[] = [];
 
     for (let index = 0; index < encoded.length; index++) {
-        const char = encoded[index];
-        if (char === '\\' && index + 3 < encoded.length) {
-            const octal = encoded.slice(index + 1, index + 4);
-            if (/^[0-7]{3}$/u.test(octal)) {
-                bytes.push(parseInt(octal, 8));
-                index += 3;
-                continue;
-            }
+        const code = encoded.charCodeAt(index);
+
+        // Skip bare (un-escaped) control characters — same as iTerm2's
+        // `if (c < ' ') { continue; }` guard.
+        if (code < 0x20) {
+            continue;
         }
 
-        // Encode the character as UTF-8 bytes.  With node-pty, tmux may
-        // pass printable multi-byte characters (e.g. Nerd Font glyphs)
-        // un-escaped — Buffer.from handles them correctly.
-        const buf = Buffer.from(char, 'utf8');
+        if (encoded[index] === '\\') {
+            // Try to read exactly 3 octal digits, skipping any bare \r
+            // characters the line driver may have inserted.
+            let value = 0;
+            let digits = 0;
+            let scan = index + 1;
+            while (digits < 3 && scan < encoded.length) {
+                const ch = encoded.charCodeAt(scan);
+                if (ch === 0x0d) {     // bare \r — skip
+                    scan++;
+                    continue;
+                }
+                if (ch < 0x30 || ch > 0x37) {  // not '0'..'7'
+                    break;
+                }
+                value = value * 8 + (ch - 0x30);
+                digits++;
+                scan++;
+            }
+            if (digits === 3) {
+                bytes.push(value);
+                index = scan - 1;   // outer for will increment
+                continue;
+            }
+            // Not a valid octal escape — fall through and emit '\' as-is.
+        }
+
+        // Printable character (or multi-byte UTF-8 glyph from tmux).
+        const buf = Buffer.from(encoded[index], 'utf8');
         for (const b of buf) {
             bytes.push(b);
         }
