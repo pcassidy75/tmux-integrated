@@ -112,16 +112,6 @@ windows in the background while VS Code handles all rendering.  This means
 shell integration, Copilot, mouse support, and the `code` CLI all continue to
 work exactly as they do in a normal VS Code terminal.
 
-## Differences from existing solutions
-
-| | [wenbo.io approach](https://www.wenbo.io/en-US/Tools/Persistent-VSCode-Remote-Terminals) | **tmux-integrated** |
-|---|---|---|
-| tmux version required | > 3.2 | ≥ 2.1 |
-| Requires custom tmux.conf | Yes | No |
-| Copilot compatible | Partial | Yes |
-| `code` command works | No | Yes |
-| Mouse-mode free | No | Yes |
-
 ## Contributing
 
 Contributions are welcome — open an issue or submit a pull request.
