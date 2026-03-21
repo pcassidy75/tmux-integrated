@@ -13,19 +13,28 @@
  *       %window-add @<id>
  *       %window-close @<id>
  *       %sessions-changed
+ *       %session-changed $<id> <name>
  *       %exit [reason]
  *   • Command responses are wrapped in a begin/end block:
  *       %begin <time> <num> 0
  *       [optional response lines]
  *       %end <time> <num> 0   |   %error <time> <num> 0
  *
- * In control mode, pane output is escaped inline. tmux encodes non-printable
- * bytes and literal backslashes as octal sequences such as \033.
+ * Architecture (Phase 1 refactor):
+ *   TmuxGateway      — protocol parsing, %begin/%end handling, command queuing,
+ *                      command flags (TolerateErrors), command batching, write
+ *                      queuing (defers writes until %session-changed).
+ *   TmuxControlClient — PTY lifecycle, high-level typed commands (newWindow,
+ *                       listWindows, …), version gating.
  */
 
 import { EventEmitter } from 'events';
 import * as path from 'path';
-import { StringDecoder } from 'string_decoder';
+
+import { TmuxGateway, CommandFlags } from './tmuxGateway';
+
+export type { TmuxPaneOutput, TmuxLayoutChange, TmuxWindowPaneChange } from './tmuxGateway';
+export { CommandFlags } from './tmuxGateway';
 
 /**
  * Minimal interface for the node-pty `IPty` object.  We load node-pty at
@@ -35,13 +44,9 @@ interface IPty {
     onData: (callback: (data: string) => void) => { dispose(): void };
     onExit: (callback: (ev: { exitCode: number; signal?: number }) => void) => { dispose(): void };
     write(data: string): void;
+    resize(cols: number, rows: number): void;
     kill(signal?: string): void;
     pid: number;
-}
-
-export interface TmuxPaneOutput {
-    paneId: string;
-    data: string;
 }
 
 export interface TmuxWindow {
@@ -52,36 +57,15 @@ export interface TmuxWindow {
     active: boolean;
 }
 
-export interface TmuxLayoutChange {
-    windowId: string;
-    layout: string;
-    visibleLayout: string;
-    flags: string;
-}
-
-export interface TmuxWindowPaneChange {
-    windowId: string;
-    paneId: string;
-}
-
 export interface TmuxPaneCursor {
     x: number;
     y: number;
 }
 
-interface PendingCommand {
-    resolve: (lines: string[]) => void;
-    reject: (err: Error) => void;
-}
-
 export class TmuxControlClient extends EventEmitter {
     private pty: IPty | null = null;
-    private readBuffer = '';
-    private responseBuffer: string[] = [];
-    private inBlock = false;
-    private pendingQueue: PendingCommand[] = [];
+    private gateway: TmuxGateway | null = null;
     private _connected = false;
-    private readonly paneDecoders = new Map<string, StringDecoder>();
     private _version: { major: number; minor: number } | null = null;
 
     constructor(
@@ -117,6 +101,38 @@ export class TmuxControlClient extends EventEmitter {
     }
 
     /**
+     * Locate VS Code's bundled node-pty.  The exact path varies between local
+     * and remote (SSH / WSL / tunnel) installs and across VS Code versions:
+     *   • node_modules/node-pty              — older, local installs
+     *   • node_modules.asar.unpacked/node-pty — native modules extracted from asar
+     *   • node_modules/@vscode/node-pty       — scoped package in recent builds
+     *   • node_modules.asar.unpacked/@vscode/node-pty
+     */
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    private requireNodePty(): any {
+        const candidates = [
+            path.join(this.appRoot, 'node_modules', 'node-pty'),
+            path.join(this.appRoot, 'node_modules.asar.unpacked', 'node-pty'),
+            path.join(this.appRoot, 'node_modules', '@vscode', 'node-pty'),
+            path.join(this.appRoot, 'node_modules.asar.unpacked', '@vscode', 'node-pty'),
+        ];
+
+        for (const candidate of candidates) {
+            try {
+                // eslint-disable-next-line @typescript-eslint/no-var-requires
+                return require(candidate);
+            } catch {
+                // Try the next candidate.
+            }
+        }
+
+        throw new Error(
+            `node-pty not found in VS Code installation (appRoot: ${this.appRoot}). ` +
+            `Searched: ${candidates.join(', ')}`,
+        );
+    }
+
+    /**
      * Spawn tmux -CC inside a real PTY using node-pty (bundled with VS Code).
      * This gives tmux the tty it requires without any external dependency.
      */
@@ -135,10 +151,7 @@ export class TmuxControlClient extends EventEmitter {
                 tmuxArgs.push('-c', options.startDirectory);
             }
 
-            // node-pty is bundled with VS Code but not on the default
-            // require path for extensions.  Resolve it from VS Code's app root.
-            // eslint-disable-next-line @typescript-eslint/no-var-requires
-            const nodePty = require(path.join(this.appRoot, 'node_modules', 'node-pty')) as {
+            const nodePty = this.requireNodePty() as {
                 spawn(
                     file: string,
                     args: string[],
@@ -150,21 +163,54 @@ export class TmuxControlClient extends EventEmitter {
                 name: 'xterm-256color',
                 cols: 220,
                 rows: 50,
-                cwd: process.cwd(),
+                cwd: options?.startDirectory || process.env.HOME || process.cwd(),
                 env: process.env as Record<string, string>,
             });
 
+            // Create a fresh gateway for this connection.
+            const gw = new TmuxGateway();
+            this.gateway = gw;
+
+            // Wire the PTY write function into the gateway.
+            gw.setWriter((data) => this.pty?.write(data));
+
+            // Forward all gateway events to this client so external listeners
+            // (TmuxTerminalProvider, extension.ts) continue to work unchanged.
+            const forwardedEvents = [
+                'output',
+                'window-add',
+                'window-close',
+                'window-renamed',
+                'layout-change',
+                'window-pane-changed',
+                'session-window-changed',
+                'session-renamed',
+                'sessions-changed',
+                'session-changed',
+                'pane-mode-changed',
+                'paste-buffer-changed',
+                'pause',
+                'continue',
+                'message',
+                'tmux-exit',
+                '_initial-handshake',
+            ] as const;
+
+            for (const ev of forwardedEvents) {
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                gw.on(ev, (...args: any[]) => this.emit(ev, ...args));
+            }
+
+            // Feed PTY output into the gateway.
             this.pty.onData((data: string) => {
-                this.ingest(data);
+                gw.ingest(data);
             });
 
+            // On PTY exit, drain pending commands and signal disconnection.
             this.pty.onExit(({ exitCode }) => {
                 this._connected = false;
+                gw.drainOnExit();
                 this.emit('tmux-exit', exitCode);
-                for (const cmd of this.pendingQueue) {
-                    cmd.reject(new Error('tmux process exited'));
-                }
-                this.pendingQueue = [];
                 this.pty = null;
             });
 
@@ -180,23 +226,26 @@ export class TmuxControlClient extends EventEmitter {
             this.once('_ready', onReady);
             this.once('_ready-error', onReadyError);
 
-            setTimeout(() => {
-                if (!this.pty) {
-                    this.emit('_ready-error', new Error('tmux process exited before handshake'));
-                    return;
-                }
-                this.sendCommand('display-message -p "__tmux_integrated_ready__"')
+            // After the initial %begin/%end handshake the gateway emits
+            // '_initial-handshake'.  Only then do we send the readiness probe
+            // so that it is the very first command in the write queue and is
+            // flushed (along with any other queued commands) once
+            // %session-changed arrives.
+            this.once('_initial-handshake', () => {
+                gw.sendCommand('display-message -p "__tmux_integrated_ready__"')
                     .then((lines) => {
                         if (lines[0]?.trim() === '__tmux_integrated_ready__') {
                             this.emit('_ready');
                             return;
                         }
-                        this.emit('_ready-error', new Error('Unexpected tmux readiness response'));
+                        this.emit('_ready-error', new Error(
+                            `Unexpected tmux readiness response: ${JSON.stringify(lines)}`,
+                        ));
                     })
                     .catch((err) => {
                         this.emit('_ready-error', err instanceof Error ? err : new Error(String(err)));
                     });
-            }, 50);
+            });
 
             const timer = setTimeout(() => {
                 this.removeListener('_ready', onReady);
@@ -213,141 +262,38 @@ export class TmuxControlClient extends EventEmitter {
     }
 
     // -----------------------------------------------------------------------
-    // Protocol parsing
-    // -----------------------------------------------------------------------
-
-    private ingest(raw: string): void {
-        this.readBuffer += raw;
-
-        let lineEnd = this.readBuffer.indexOf('\n');
-        while (lineEnd !== -1) {
-            const line = this.readBuffer.slice(0, lineEnd).replace(/\r$/u, '');
-            this.readBuffer = this.readBuffer.slice(lineEnd + 1);
-            this.parseLine(line);
-            lineEnd = this.readBuffer.indexOf('\n');
-        }
-    }
-
-    private parseLine(line: string): void {
-        if (!line) { return; }
-
-        // Strip DCS wrapper (\x1bP...l … \x1b\\) emitted when tmux detects a tty.
-        if (line.startsWith('\x1bP')) {
-            line = line.replace(/^\x1bP[^l]*l/, '').replace(/\x1b\\$/, '');
-        }
-
-        if (line.startsWith('%begin')) {
-            this.inBlock = true;
-            this.responseBuffer = [];
-        } else if (line.startsWith('%end')) {
-            this.inBlock = false;
-            const cmd = this.pendingQueue.shift();
-            if (cmd) {
-                cmd.resolve(this.responseBuffer.slice());
-            } else if (!this._connected) {
-                // The very first %end signals that tmux is ready.
-                this.emit('_ready');
-            }
-            this.responseBuffer = [];
-        } else if (line.startsWith('%error')) {
-            this.inBlock = false;
-            const cmd = this.pendingQueue.shift();
-            if (cmd) {
-                cmd.reject(new Error(this.responseBuffer.join('\n') || line));
-            }
-            this.responseBuffer = [];
-        } else if (this.inBlock && line.startsWith('%')) {
-            // tmux may emit asynchronous notifications while a command block
-            // is in flight. These must still be processed as notifications
-            // rather than being swallowed as command response text.
-            this.parseNotification(line);
-        } else if (this.inBlock) {
-            this.responseBuffer.push(line);
-        } else {
-            this.parseNotification(line);
-        }
-    }
-
-    private parseNotification(line: string): void {
-        if (line.startsWith('%output ')) {
-            this.parseOutput(line);
-        } else if (line.startsWith('%extended-output ')) {
-            this.parseExtendedOutput(line);
-        } else if (line.startsWith('%window-add ')) {
-            this.emit('window-add', line.slice('%window-add '.length).trim());
-        } else if (line.startsWith('%window-close ') || line.startsWith('%unlinked-window-close ')) {
-            const prefix = line.startsWith('%window-close ') ? '%window-close ' : '%unlinked-window-close ';
-            const windowId = line.slice(prefix.length).trim().split(/\s+/u)[0];
-            this.emit('window-close', windowId);
-        } else if (line.startsWith('%window-renamed ')) {
-            this.emit('window-renamed', parseWindowRenamed(line));
-        } else if (line.startsWith('%layout-change ')) {
-            const layoutChange = parseLayoutChange(line);
-            if (layoutChange) {
-                this.emit('layout-change', layoutChange);
-            }
-        } else if (line.startsWith('%window-pane-changed ')) {
-            const paneChange = parseWindowPaneChange(line);
-            if (paneChange) {
-                this.emit('window-pane-changed', paneChange);
-            }
-        } else if (line.startsWith('%session-window-changed ')) {
-            this.emit('session-window-changed', parseSessionWindowChanged(line));
-        } else if (line.startsWith('%session-renamed ')) {
-            this.emit('session-renamed', line.slice('%session-renamed '.length));
-        } else if (line.startsWith('%sessions-changed')) {
-            this.emit('sessions-changed');
-        } else if (line.startsWith('%pane-mode-changed ')) {
-            this.emit('pane-mode-changed', line.slice('%pane-mode-changed '.length).trim());
-        } else if (line.startsWith('%pause ')) {
-            this.emit('pause', line.slice('%pause '.length).trim());
-        } else if (line.startsWith('%continue ')) {
-            this.emit('continue', line.slice('%continue '.length).trim());
-        } else if (line.startsWith('%message ')) {
-            this.emit('message', line.slice('%message '.length));
-        } else if (line.startsWith('%exit')) {
-            this.emit('tmux-exit');
-        }
-    }
-
-    private parseOutput(line: string): void {
-        const rest = line.slice('%output '.length);
-        const sp = rest.indexOf(' ');
-        if (sp === -1) {
-            return;
-        }
-
-        const paneId = rest.slice(0, sp);
-        const encoded = rest.slice(sp + 1);
-        const data = this.decodePaneOutput(paneId, encoded);
-        this.emit('output', { paneId, data } as TmuxPaneOutput);
-    }
-
-    private parseExtendedOutput(line: string): void {
-        const match = /^%extended-output\s+(%\S+)\s+(\d+)\s+(?:.*?\s+)?:\s?(.*)$/u.exec(line);
-        if (!match) {
-            return;
-        }
-
-        const [, paneId, , encoded] = match;
-        const data = this.decodePaneOutput(paneId, encoded);
-        this.emit('output', { paneId, data } as TmuxPaneOutput);
-    }
-
-    // -----------------------------------------------------------------------
     // Commands
     // -----------------------------------------------------------------------
 
-    /** Send a single-line tmux command and return the response lines. */
-    sendCommand(command: string): Promise<string[]> {
-        return new Promise((resolve, reject) => {
-            if (!this.pty) {
-                reject(new Error('Not connected to tmux'));
-                return;
-            }
-            this.pendingQueue.push({ resolve, reject });
-            this.pty.write(command + '\r');
-        });
+    /**
+     * Send a single tmux command and return the response lines.
+     *
+     * Delegates to TmuxGateway, which queues the write if the session is not
+     * yet ready and supports the TolerateErrors flag.
+     */
+    sendCommand(command: string, flags: number = CommandFlags.None): Promise<string[]> {
+        if (!this.gateway) {
+            return Promise.reject(new Error('Not connected to tmux'));
+        }
+        return this.gateway.sendCommand(command, flags);
+    }
+
+    /**
+     * Send multiple tmux commands as a single batched write.
+     *
+     * Commands are joined with ' ; ' and sent as one line.  tmux generates
+     * one %begin/%end response pair per command.  Use this for atomic
+     * multi-step operations (e.g. resize + list-windows) to reduce PTY
+     * round-trips.
+     *
+     * Returns a Promise that resolves to an array of response-line arrays,
+     * one per input command.
+     */
+    sendCommandList(commands: string[], flags: number = CommandFlags.None): Promise<string[][]> {
+        if (!this.gateway) {
+            return Promise.reject(new Error('Not connected to tmux'));
+        }
+        return this.gateway.sendCommandList(commands, flags);
     }
 
     /** Create a new window in the current session. Returns its window and pane IDs. */
@@ -393,8 +339,25 @@ export class TmuxControlClient extends EventEmitter {
         await this.sendCommand(`resize-pane -t ${paneId} -x ${cols} -y ${rows}`);
     }
 
+    /**
+     * Resize the tmux client to match the VS Code terminal dimensions.
+     *
+     * Uses only `refresh-client -C` (available since tmux 2.1) to set the
+     * control-mode client size.  The underlying control-channel PTY is kept
+     * at its initial large size (220 cols) so that tmux protocol lines
+     * (which can be very long for complex zsh prompts) are never affected
+     * by PTY output processing.
+     *
+     * iTerm2 similarly relies on `refresh-client -C` for sizing without
+     * resizing the control channel PTY to match each pane.
+     */
     async resizeWindowForClient(cols: number, rows: number): Promise<void> {
-        await this.sendCommand(`refresh-client -C ${cols}x${rows}`);
+        // refresh-client -C sets the control-mode client size.  Available
+        // since tmux 2.1; tolerates errors on truly ancient builds.
+        await this.sendCommand(
+            `refresh-client -C ${cols},${rows}`,
+            CommandFlags.TolerateErrors,
+        );
     }
 
     async killWindow(windowId: string): Promise<void> {
@@ -424,8 +387,7 @@ export class TmuxControlClient extends EventEmitter {
             cmd += ` -c ${shellescape(options.startDirectory)}`;
         }
         // Per-pane respawn environment via -e is intentionally disabled for
-        // compatibility with older tmux versions. Respawned panes inherit the
-        // session environment set through updateEnvironment.
+        // compatibility with older tmux versions.
         void options.env;
         if (options.shell) {
             cmd += ` ${shellescape(options.shell)}`;
@@ -456,7 +418,6 @@ export class TmuxControlClient extends EventEmitter {
         }
 
         const res = await this.sendCommand(cmd);
-        // With node-pty, response lines are already proper UTF-8 strings.
         return res.join('\n');
     }
 
@@ -477,12 +438,16 @@ export class TmuxControlClient extends EventEmitter {
      *
      * Uses `-t` to scope changes to this session rather than `-g` (global),
      * which would leak variables into every tmux session on the machine.
+     *
+     * All set-environment calls are batched into a single PTY write.
      */
     async updateEnvironment(vars: Record<string, string>): Promise<void> {
-        for (const [k, v] of Object.entries(vars)) {
-            await this.sendCommand(
+        const commands = Object.entries(vars).map(
+            ([k, v]) =>
                 `set-environment -t ${shellescape(this.sessionName)} ${shellescape(k)} ${shellescape(v)}`,
-            );
+        );
+        if (commands.length > 0) {
+            await this.sendCommandList(commands, CommandFlags.TolerateErrors);
         }
     }
 
@@ -493,7 +458,7 @@ export class TmuxControlClient extends EventEmitter {
             this.pty = null;
         }
         this._connected = false;
-        this.paneDecoders.clear();
+        this.gateway = null;
     }
 
     isConnected(): boolean {
@@ -502,17 +467,7 @@ export class TmuxControlClient extends EventEmitter {
 
     /** Remove the incremental UTF-8 decoder for a closed pane. */
     removePaneDecoder(paneId: string): void {
-        this.paneDecoders.delete(paneId);
-    }
-
-    private decodePaneOutput(paneId: string, encoded: string): string {
-        let decoder = this.paneDecoders.get(paneId);
-        if (!decoder) {
-            decoder = new StringDecoder('utf8');
-            this.paneDecoders.set(paneId, decoder);
-        }
-
-        return decoder.write(decodeOutput(encoded));
+        this.gateway?.removePaneDecoder(paneId);
     }
 }
 
@@ -520,78 +475,10 @@ export class TmuxControlClient extends EventEmitter {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Decode data from a tmux %output or %extended-output notification. */
-function decodeOutput(encoded: string): Buffer {
-    const bytes: number[] = [];
-
-    for (let index = 0; index < encoded.length; index++) {
-        const char = encoded[index];
-        if (char === '\\' && index + 3 < encoded.length) {
-            const octal = encoded.slice(index + 1, index + 4);
-            if (/^[0-7]{3}$/u.test(octal)) {
-                bytes.push(parseInt(octal, 8));
-                index += 3;
-                continue;
-            }
-        }
-
-        // Encode the character as UTF-8 bytes.  With node-pty, tmux may
-        // pass printable multi-byte characters (e.g. Nerd Font glyphs)
-        // un-escaped — Buffer.from handles them correctly, whereas the
-        // old charCodeAt(0) approach only worked for single-byte chars.
-        const buf = Buffer.from(char, 'utf8');
-        for (const b of buf) {
-            bytes.push(b);
-        }
-    }
-
-    return Buffer.from(bytes);
-}
-
 /**
  * Minimal shell-escaping: wrap value in single quotes and escape any
  * single quotes inside it.  Safe for passing to tmux command strings.
  */
 export function shellescape(value: string): string {
     return `'${value.replace(/'/g, `'\\''`)}'`;
-}
-
-function parseLayoutChange(line: string): TmuxLayoutChange | null {
-    const match = /^%layout-change\s+(@\S+)\s+(\S+)\s+(\S+)\s*(.*)$/u.exec(line);
-    if (!match) {
-        return null;
-    }
-
-    const [, windowId, layout, visibleLayout, flags] = match;
-    return { windowId, layout, visibleLayout, flags: flags.trim() };
-}
-
-function parseWindowPaneChange(line: string): TmuxWindowPaneChange | null {
-    const match = /^%window-pane-changed\s+(@\S+)\s+(%\S+)$/u.exec(line);
-    if (!match) {
-        return null;
-    }
-
-    const [, windowId, paneId] = match;
-    return { windowId, paneId };
-}
-
-function parseWindowRenamed(line: string): { windowId: string; name: string } | null {
-    const match = /^%window-renamed\s+(@\S+)\s+(.*)$/u.exec(line);
-    if (!match) {
-        return null;
-    }
-
-    const [, windowId, name] = match;
-    return { windowId, name };
-}
-
-function parseSessionWindowChanged(line: string): { sessionId: string; windowId: string } | null {
-    const match = /^%session-window-changed\s+(\$\S+)\s+(@\S+)$/u.exec(line);
-    if (!match) {
-        return null;
-    }
-
-    const [, sessionId, windowId] = match;
-    return { sessionId, windowId };
 }

@@ -1,0 +1,270 @@
+<mxfile host="65bd71144e">
+    <diagram id="architecture" name="Architecture">
+        <mxGraphModel dx="1955" dy="1601" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1200" math="0" shadow="0">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+                <mxCell id="title" value="tmux-integrated — Architecture" style="text;html=1;fontSize=22;fontStyle=1;align=center;verticalAlign=middle;" parent="1" vertex="1">
+                    <mxGeometry x="500" y="20" width="600" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="vscode_host" value="VS Code Extension Host" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=14;fontStyle=1;verticalAlign=top;align=center;spacingTop=5;dashed=1;dashPattern=8 4;" parent="1" vertex="1">
+                    <mxGeometry x="60" y="80" width="1480" height="1080" as="geometry"/>
+                </mxCell>
+                <mxCell id="ext_container" value="extension.ts — Entry Point" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=13;fontStyle=1;verticalAlign=top;align=center;spacingTop=5;" parent="1" vertex="1">
+                    <mxGeometry x="100" y="120" width="1400" height="280" as="geometry"/>
+                </mxCell>
+                <mxCell id="activate" value="&lt;b&gt;activate()&lt;/b&gt;&lt;br/&gt;Extension entry point&lt;br/&gt;&lt;hr size=&quot;1&quot;/&gt;• Create OutputChannel&lt;br/&gt;• Resolve startDirectory &amp; sessionName&lt;br/&gt;• Create StatusBarItem&lt;br/&gt;• Register terminal profile &amp; commands&lt;br/&gt;• Set up disposal hooks" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=11;align=left;spacingLeft=8;verticalAlign=top;spacingTop=4;" parent="1" vertex="1">
+                    <mxGeometry x="130" y="155" width="280" height="160" as="geometry"/>
+                </mxCell>
+                <mxCell id="deactivate" value="&lt;b&gt;deactivate()&lt;/b&gt;&lt;br/&gt;Disconnect client&lt;br/&gt;(session persists)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=11;align=center;" parent="1" vertex="1">
+                    <mxGeometry x="130" y="330" width="170" height="55" as="geometry"/>
+                </mxCell>
+                <mxCell id="ensure_connected" value="&lt;b&gt;ensureClientConnected()&lt;/b&gt;&lt;hr size=&quot;1&quot;/&gt;• Health-check existing connection&lt;br/&gt;• Resolve tmux binary path&lt;br/&gt;• Create TmuxControlClient&lt;br/&gt;• Connect (tmux -CC)&lt;br/&gt;• Bootstrap / adopt windows&lt;br/&gt;• Push VS Code env vars" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=11;align=left;spacingLeft=8;verticalAlign=top;spacingTop=4;" parent="1" vertex="1">
+                    <mxGeometry x="450" y="155" width="240" height="145" as="geometry"/>
+                </mxCell>
+                <mxCell id="commands" value="&lt;b&gt;Registered Commands&lt;/b&gt;&lt;hr size=&quot;1&quot;/&gt;• tmux-integrated.newTerminal&lt;br/&gt;• tmux-integrated.attachWindow" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=11;align=left;spacingLeft=8;verticalAlign=top;spacingTop=4;" parent="1" vertex="1">
+                    <mxGeometry x="730" y="155" width="240" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="profile_provider" value="&lt;b&gt;Terminal Profile Provider&lt;/b&gt;&lt;br/&gt;&lt;i&gt;tmux-integrated.terminal&lt;/i&gt;&lt;hr size=&quot;1&quot;/&gt;provideTerminalProfile()&lt;br/&gt;→ bootstrap / adopt / new window" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=11;align=left;spacingLeft=8;verticalAlign=top;spacingTop=4;" parent="1" vertex="1">
+                    <mxGeometry x="730" y="255" width="240" height="100" as="geometry"/>
+                </mxCell>
+                <mxCell id="helpers" value="&lt;b&gt;Helper Functions&lt;/b&gt;&lt;hr size=&quot;1&quot;/&gt;• buildTerminalOptions()&lt;br/&gt;• buildTerminalProfile()&lt;br/&gt;• takeBootstrapWindow()&lt;br/&gt;• adoptNextWindow()&lt;br/&gt;• showAttachWindowPicker()&lt;br/&gt;• collectVscodeEnvVars()&lt;br/&gt;• resolveSessionName()&lt;br/&gt;• resolveStartDirectory()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=11;align=left;spacingLeft=8;verticalAlign=top;spacingTop=4;" parent="1" vertex="1">
+                    <mxGeometry x="1010" y="155" width="210" height="180" as="geometry"/>
+                </mxCell>
+                <mxCell id="global_state" value="&lt;b&gt;Module State&lt;/b&gt;&lt;hr size=&quot;1&quot;/&gt;client: TmuxControlClient&lt;br/&gt;statusBar: StatusBarItem&lt;br/&gt;outputChannel&lt;br/&gt;attachedWindowIds: Set&lt;br/&gt;bootstrapWindow&lt;br/&gt;windowsToAdopt[]" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=11;align=left;spacingLeft=8;verticalAlign=top;spacingTop=4;" parent="1" vertex="1">
+                    <mxGeometry x="1260" y="155" width="200" height="140" as="geometry"/>
+                </mxCell>
+                <mxCell id="client_container" value="tmuxControlClient.ts — TmuxControlClient" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=13;fontStyle=1;verticalAlign=top;align=center;spacingTop=5;" parent="1" vertex="1">
+                    <mxGeometry x="100" y="440" width="700" height="430" as="geometry"/>
+                </mxCell>
+                <mxCell id="client_lifecycle" value="&lt;b&gt;Connection &amp; Lifecycle&lt;/b&gt;&lt;hr size=&quot;1&quot;/&gt;• connect() — spawn tmux -CC via node-pty&lt;br/&gt;• disconnect() — detach &amp; kill pty&lt;br/&gt;• isConnected()&lt;br/&gt;• setVersion() / versionAtLeast()&lt;br/&gt;• requireNodePty() — locate VS Code&#39;s&lt;br/&gt;&amp;nbsp;&amp;nbsp;bundled node-pty" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#82b366;fontSize=11;align=left;spacingLeft=8;verticalAlign=top;spacingTop=4;" parent="1" vertex="1">
+                    <mxGeometry x="120" y="480" width="280" height="140" as="geometry"/>
+                </mxCell>
+                <mxCell id="client_protocol" value="&lt;b&gt;Protocol Parser&lt;/b&gt;&lt;hr size=&quot;1&quot;/&gt;• ingest(raw) — buffer &amp; split lines&lt;br/&gt;• parseLine(line) — route to blocks/notifs&lt;br/&gt;• parseNotification(line) — %output,&lt;br/&gt;&amp;nbsp;&amp;nbsp;%window-add, %window-close,&lt;br/&gt;&amp;nbsp;&amp;nbsp;%layout-change, %exit, etc.&lt;br/&gt;• parseOutput() / parseExtendedOutput()&lt;br/&gt;• decodePaneOutput() — octal unescape&lt;br/&gt;&amp;nbsp;&amp;nbsp;+ incremental UTF-8 StringDecoder" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#82b366;fontSize=11;align=left;spacingLeft=8;verticalAlign=top;spacingTop=4;" parent="1" vertex="1">
+                    <mxGeometry x="120" y="640" width="280" height="180" as="geometry"/>
+                </mxCell>
+                <mxCell id="client_commands" value="&lt;b&gt;Command API&lt;/b&gt;&lt;hr size=&quot;1&quot;/&gt;• sendCommand(cmd) → Promise&amp;lt;string[]&amp;gt;&lt;br/&gt;• newWindow(opts) → {windowId, paneId}&lt;br/&gt;• killWindow(windowId)&lt;br/&gt;• listWindows() → TmuxWindow[]&lt;br/&gt;• resizePane() / resizeWindowForClient()&lt;br/&gt;• capturePane() → screen snapshot&lt;br/&gt;• getPaneCursor() → {x, y}&lt;br/&gt;• getPaneTty() → /dev/pts/N&lt;br/&gt;• respawnPane()&lt;br/&gt;• updateEnvironment(vars)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#82b366;fontSize=11;align=left;spacingLeft=8;verticalAlign=top;spacingTop=4;" parent="1" vertex="1">
+                    <mxGeometry x="430" y="480" width="260" height="195" as="geometry"/>
+                </mxCell>
+                <mxCell id="client_events" value="&lt;b&gt;Events Emitted&lt;/b&gt;&lt;hr size=&quot;1&quot;/&gt;• output {paneId, data}&lt;br/&gt;• window-add @id&lt;br/&gt;• window-close @id&lt;br/&gt;• window-renamed&lt;br/&gt;• layout-change&lt;br/&gt;• window-pane-changed&lt;br/&gt;• session-window-changed&lt;br/&gt;• sessions-changed&lt;br/&gt;• tmux-exit&lt;br/&gt;• pause / continue" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#82b366;fontSize=11;align=left;spacingLeft=8;verticalAlign=top;spacingTop=4;" parent="1" vertex="1">
+                    <mxGeometry x="430" y="695" width="200" height="165" as="geometry"/>
+                </mxCell>
+                <mxCell id="pending_queue" value="&lt;b&gt;Internal State&lt;/b&gt;&lt;hr size=&quot;1&quot;/&gt;pendingQueue: PendingCommand[]&lt;br/&gt;readBuffer: string&lt;br/&gt;responseBuffer: string[]&lt;br/&gt;paneDecoders: Map&lt;br/&gt;inBlock: boolean" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#82b366;fontSize=11;align=left;spacingLeft=8;verticalAlign=top;spacingTop=4;" parent="1" vertex="1">
+                    <mxGeometry x="660" y="695" width="120" height="125" as="geometry"/>
+                </mxCell>
+                <mxCell id="terminal_container" value="tmuxTerminalProvider.ts — TmuxTerminal (Pseudoterminal)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=13;fontStyle=1;verticalAlign=top;align=center;spacingTop=5;" parent="1" vertex="1">
+                    <mxGeometry x="840" y="440" width="620" height="430" as="geometry"/>
+                </mxCell>
+                <mxCell id="pty_interface" value="&lt;b&gt;vscode.Pseudoterminal Interface&lt;/b&gt;&lt;hr size=&quot;1&quot;/&gt;• open(dims) — create/adopt tmux window,&lt;br/&gt;&amp;nbsp;&amp;nbsp;subscribe to %output events,&lt;br/&gt;&amp;nbsp;&amp;nbsp;capture initial screen snapshot&lt;br/&gt;• handleInput(data) — forward keystrokes&lt;br/&gt;• setDimensions(dims) — resize tmux window&lt;br/&gt;• close() — cleanup listeners (window survives)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#b85450;fontSize=11;align=left;spacingLeft=8;verticalAlign=top;spacingTop=4;" parent="1" vertex="1">
+                    <mxGeometry x="860" y="480" width="290" height="145" as="geometry"/>
+                </mxCell>
+                <mxCell id="key_mapping" value="&lt;b&gt;Input Processing&lt;/b&gt;&lt;hr size=&quot;1&quot;/&gt;sendKeysInput(data)&lt;br/&gt;→ Match escape sequences&lt;br/&gt;&amp;nbsp;&amp;nbsp;via KEY_MAP (sorted longest-first)&lt;br/&gt;→ send-keys -t %pane &quot;KeyName&quot;&lt;br/&gt;→ send-keys -t %pane -l &quot;literal&quot;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#b85450;fontSize=11;align=left;spacingLeft=8;verticalAlign=top;spacingTop=4;" parent="1" vertex="1">
+                    <mxGeometry x="860" y="645" width="250" height="120" as="geometry"/>
+                </mxCell>
+                <mxCell id="output_norm" value="&lt;b&gt;Output Processing&lt;/b&gt;&lt;hr size=&quot;1&quot;/&gt;normalizeTerminalOutput()&lt;br/&gt;→ CR/LF normalization&lt;br/&gt;→ writeEmitter.fire(data)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#b85450;fontSize=11;align=left;spacingLeft=8;verticalAlign=top;spacingTop=4;" parent="1" vertex="1">
+                    <mxGeometry x="1180" y="480" width="220" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="reconciliation" value="&lt;b&gt;Post-Input Reconciliation&lt;/b&gt;&lt;hr size=&quot;1&quot;/&gt;scheduleReconciliation()&lt;br/&gt;→ debounced 80ms after last %output&lt;br/&gt;→ only if user typed within 500ms&lt;br/&gt;reconcile()&lt;br/&gt;→ capturePane (authoritative screen)&lt;br/&gt;→ clear + rewrite VS Code terminal" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#b85450;fontSize=11;align=left;spacingLeft=8;verticalAlign=top;spacingTop=4;" parent="1" vertex="1">
+                    <mxGeometry x="1130" y="595" width="270" height="140" as="geometry"/>
+                </mxCell>
+                <mxCell id="terminal_emitters" value="&lt;b&gt;Event Emitters&lt;/b&gt;&lt;hr size=&quot;1&quot;/&gt;onDidWrite → VS Code renderer&lt;br/&gt;onDidClose → tab lifecycle&lt;br/&gt;onDidChangeName → tab title" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#b85450;fontSize=11;align=left;spacingLeft=8;verticalAlign=top;spacingTop=4;" parent="1" vertex="1">
+                    <mxGeometry x="1180" y="755" width="220" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="lifecycle_hooks" value="&lt;b&gt;Lifecycle Hooks&lt;/b&gt;&lt;hr size=&quot;1&quot;/&gt;onWindowAttached → track ID&lt;br/&gt;onWindowDetached → untrack ID&lt;br/&gt;onWindowAttachFailed" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#b85450;fontSize=11;align=left;spacingLeft=8;verticalAlign=top;spacingTop=4;" parent="1" vertex="1">
+                    <mxGeometry x="860" y="785" width="220" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="tmux_process" value="&lt;b&gt;tmux server process&lt;/b&gt;&lt;hr size=&quot;1&quot;/&gt;Session persists across VS Code restarts&lt;br/&gt;Each VS Code tab ↔ 1 tmux window&lt;br/&gt;Shell processes live under tmux" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e6e6e6;strokeColor=#333333;fontSize=12;fontStyle=0;align=center;verticalAlign=top;spacingTop=4;" parent="1" vertex="1">
+                    <mxGeometry x="250" y="930" width="310" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="node_pty" value="&lt;b&gt;node-pty&lt;/b&gt;&lt;br/&gt;(bundled with VS Code)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e6e6e6;strokeColor=#333333;fontSize=11;align=center;" parent="1" vertex="1">
+                    <mxGeometry x="110" y="950" width="120" height="50" as="geometry"/>
+                </mxCell>
+                <mxCell id="vscode_terminal_ui" value="&lt;b&gt;VS Code Terminal Tabs&lt;/b&gt;&lt;br/&gt;(xterm.js renderer)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e6e6e6;strokeColor=#333333;fontSize=11;align=center;" parent="1" vertex="1">
+                    <mxGeometry x="1040" y="930" width="180" height="50" as="geometry"/>
+                </mxCell>
+                <mxCell id="vscode_apis" value="&lt;b&gt;VS Code APIs&lt;/b&gt;&lt;hr size=&quot;1&quot;/&gt;• window.registerTerminalProfileProvider&lt;br/&gt;• commands.registerCommand&lt;br/&gt;• window.createTerminal&lt;br/&gt;• window.createStatusBarItem&lt;br/&gt;• window.showQuickPick&lt;br/&gt;• workspace.getConfiguration" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e6e6e6;strokeColor=#333333;fontSize=11;align=left;spacingLeft=8;verticalAlign=top;spacingTop=4;" parent="1" vertex="1">
+                    <mxGeometry x="1260" y="920" width="240" height="130" as="geometry"/>
+                </mxCell>
+                <mxCell id="config" value="&lt;b&gt;package.json Configuration&lt;/b&gt;&lt;hr size=&quot;1&quot;/&gt;activationEvents: onStartupFinished&lt;br/&gt;Settings:&lt;br/&gt;&amp;nbsp;&amp;nbsp;• tmux-integrated.sessionName&lt;br/&gt;&amp;nbsp;&amp;nbsp;• tmux-integrated.shell" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e6e6e6;strokeColor=#333333;fontSize=11;align=left;spacingLeft=8;verticalAlign=top;spacingTop=4;" parent="1" vertex="1">
+                    <mxGeometry x="610" y="935" width="240" height="100" as="geometry"/>
+                </mxCell>
+                <mxCell id="e1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#333333;fontSize=10;" parent="1" source="activate" target="ensure_connected" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e1_label" value="lazy connect on&amp;nbsp;&lt;br&gt;first terminal use" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];fontSize=10;" parent="e1" vertex="1" connectable="0">
+                    <mxGeometry x="-0.1" relative="1" as="geometry">
+                        <mxPoint as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#333333;fontSize=10;" parent="1" source="activate" target="commands" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e2_label" value="registers" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];fontSize=10;" parent="e2" vertex="1" connectable="0">
+                    <mxGeometry relative="1" as="geometry">
+                        <mxPoint as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#333333;fontSize=10;" parent="1" source="activate" target="profile_provider" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e3_label" value="registers" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];fontSize=10;" parent="e3" vertex="1" connectable="0">
+                    <mxGeometry relative="1" as="geometry">
+                        <mxPoint as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e4" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#82b366;strokeWidth=2;fontSize=10;" parent="1" source="ensure_connected" target="client_lifecycle" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e4_label" value="creates &amp; connects" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];fontSize=10;" parent="e4" vertex="1" connectable="0">
+                    <mxGeometry relative="1" as="geometry">
+                        <mxPoint y="22" as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e5" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#b85450;strokeWidth=2;fontSize=10;" parent="1" source="profile_provider" target="pty_interface" edge="1">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="980" y="370"/>
+                            <mxPoint x="980" y="430"/>
+                            <mxPoint x="980" y="430"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e5_label" value="creates" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];fontSize=10;" parent="e5" vertex="1" connectable="0">
+                    <mxGeometry relative="1" as="geometry">
+                        <mxPoint as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e6" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#9673a6;strokeWidth=2;fontSize=10;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="key_mapping" target="client_commands" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e6_label" value="send-keys" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];fontSize=10;" parent="e6" vertex="1" connectable="0">
+                    <mxGeometry relative="1" as="geometry">
+                        <mxPoint as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e7" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#82b366;strokeWidth=2;dashed=1;dashPattern=8 4;fontSize=10;exitX=1;exitY=0.3;exitDx=0;exitDy=0;" parent="1" source="client_events" target="output_norm" edge="1">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="770" y="745"/>
+                            <mxPoint x="770" y="525"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e7_label" value="&#39;output&#39; event&lt;br&gt;{paneId, data}" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];fontSize=10;" parent="e7" vertex="1" connectable="0">
+                    <mxGeometry relative="1" as="geometry">
+                        <mxPoint as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e8" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#9673a6;strokeWidth=1;dashed=1;fontSize=10;exitX=0;exitY=1;exitDx=0;exitDy=0;entryX=1;entryY=0.85;entryDx=0;entryDy=0;" parent="1" source="reconciliation" target="client_commands" edge="1">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="810" y="735"/>
+                            <mxPoint x="810" y="646"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e8_label" value="capturePane +&lt;br&gt;getPaneCursor" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];fontSize=10;" parent="e8" vertex="1" connectable="0">
+                    <mxGeometry relative="1" as="geometry">
+                        <mxPoint as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e9" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#333333;strokeWidth=2;fontSize=10;" parent="1" source="client_lifecycle" target="node_pty" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e9_label" value="spawn pty" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];fontSize=10;" parent="e9" vertex="1" connectable="0">
+                    <mxGeometry relative="1" as="geometry">
+                        <mxPoint as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e10" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#333333;strokeWidth=2;fontSize=10;" parent="1" source="node_pty" target="tmux_process" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e10_label" value="tmux -CC new-session -A -s &amp;lt;name&amp;gt;" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];fontSize=10;" parent="e10" vertex="1" connectable="0">
+                    <mxGeometry relative="1" as="geometry">
+                        <mxPoint as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e11" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#82b366;strokeWidth=2;dashed=1;dashPattern=4 4;fontSize=10;exitX=0.5;exitY=0;exitDx=0;exitDy=0;" parent="1" source="tmux_process" target="client_protocol" edge="1">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="405" y="910"/>
+                            <mxPoint x="80" y="910"/>
+                            <mxPoint x="80" y="730"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e11_label" value="stdout: %begin/%end,&lt;br&gt;%output, %window-*,&lt;br&gt;%exit notifications" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];fontSize=10;" parent="e11" vertex="1" connectable="0">
+                    <mxGeometry x="-0.3" relative="1" as="geometry">
+                        <mxPoint as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e12" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#b85450;strokeWidth=2;fontSize=10;" parent="1" source="terminal_emitters" target="vscode_terminal_ui" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e12_label" value="onDidWrite →&amp;nbsp;&lt;br&gt;render output" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];fontSize=10;" parent="e12" vertex="1" connectable="0">
+                    <mxGeometry relative="1" as="geometry">
+                        <mxPoint as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e13" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#b85450;strokeWidth=1;dashed=1;dashPattern=4 4;fontSize=10;exitX=0;exitY=0;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="vscode_terminal_ui" target="pty_interface" edge="1">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="1040" y="910"/>
+                            <mxPoint x="1500" y="910"/>
+                            <mxPoint x="1500" y="553"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e13_label" value="user keystrokes →&lt;br&gt;handleInput()" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];fontSize=10;" parent="e13" vertex="1" connectable="0">
+                    <mxGeometry x="0.2" relative="1" as="geometry">
+                        <mxPoint as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e14" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#666666;strokeWidth=1;dashed=1;fontSize=10;exitX=0.5;exitY=0;exitDx=0;exitDy=0;" parent="1" source="lifecycle_hooks" target="global_state" edge="1">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="970" y="770"/>
+                            <mxPoint x="1490" y="770"/>
+                            <mxPoint x="1490" y="225"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e14_label" value="update&lt;br&gt;attachedWindowIds" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];fontSize=10;" parent="e14" vertex="1" connectable="0">
+                    <mxGeometry relative="1" as="geometry">
+                        <mxPoint as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="legend_box" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#999999;dashed=1;" parent="1" vertex="1">
+                    <mxGeometry x="60" y="1080" width="500" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="legend_title" value="&lt;b&gt;Legend:&lt;/b&gt;" style="text;html=1;fontSize=11;align=left;" parent="1" vertex="1">
+                    <mxGeometry x="70" y="1085" width="60" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="leg1" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" parent="1" vertex="1">
+                    <mxGeometry x="70" y="1110" width="16" height="16" as="geometry"/>
+                </mxCell>
+                <mxCell id="leg1t" value="Entry Point" style="text;html=1;fontSize=10;align=left;" parent="1" vertex="1">
+                    <mxGeometry x="90" y="1108" width="70" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="leg2" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" parent="1" vertex="1">
+                    <mxGeometry x="170" y="1110" width="16" height="16" as="geometry"/>
+                </mxCell>
+                <mxCell id="leg2t" value="Control Client" style="text;html=1;fontSize=10;align=left;" parent="1" vertex="1">
+                    <mxGeometry x="190" y="1108" width="80" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="leg3" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" parent="1" vertex="1">
+                    <mxGeometry x="280" y="1110" width="16" height="16" as="geometry"/>
+                </mxCell>
+                <mxCell id="leg3t" value="Pseudoterminal" style="text;html=1;fontSize=10;align=left;" parent="1" vertex="1">
+                    <mxGeometry x="300" y="1108" width="90" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="leg4" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e6e6e6;strokeColor=#333333;" parent="1" vertex="1">
+                    <mxGeometry x="400" y="1110" width="16" height="16" as="geometry"/>
+                </mxCell>
+                <mxCell id="leg4t" value="External / VS Code" style="text;html=1;fontSize=10;align=left;" parent="1" vertex="1">
+                    <mxGeometry x="420" y="1108" width="110" height="20" as="geometry"/>
+                </mxCell>
+            </root>
+        </mxGraphModel>
+    </diagram>
+</mxfile>

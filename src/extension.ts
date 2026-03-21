@@ -15,9 +15,9 @@
 
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { execFileSync, execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 
-import { TmuxControlClient } from './tmuxControlClient';
+import { TmuxControlClient, CommandFlags } from './tmuxControlClient';
 import { TmuxTerminal } from './tmuxTerminalProvider';
 
 interface AttachWindowItem extends vscode.QuickPickItem {
@@ -28,6 +28,7 @@ interface AttachWindowItem extends vscode.QuickPickItem {
 
 let client: TmuxControlClient | null = null;
 let statusBar: vscode.StatusBarItem | null = null;
+let outputChannel: vscode.OutputChannel | null = null;
 let tmuxVersion: string | null = null;
 let currentSessionName = 'vscode';
 let tmuxBinaryPath: string | null = null;
@@ -43,9 +44,14 @@ const attachedWindowIds = new Set<string>();
 // ---------------------------------------------------------------------------
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
+    outputChannel = vscode.window.createOutputChannel('tmux-integrated');
+    context.subscriptions.push(outputChannel);
+
     extensionRootPath = context.extensionPath;
     defaultStartDirectory = resolveStartDirectory(context.extensionPath);
     currentSessionName = resolveSessionName();
+
+    log(`Activating: extensionPath=${extensionRootPath}, appRoot=${vscode.env.appRoot}, startDir=${defaultStartDirectory}`);
 
     statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
     statusBar.command = 'tmux-integrated.attachWindow';
@@ -65,6 +71,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             client = null;
         },
     });
+
+    // --- Auto-connect to existing tmux session on workspace open ----------
+    const cfg = vscode.workspace.getConfiguration('tmux-integrated');
+    if (cfg.get<boolean>('autoConnect', true)) {
+        const sessionName = resolveSessionName();
+        const tmuxPath = resolveTmuxBinaryPathSafe();
+        if (tmuxPath && tmuxSessionExists(tmuxPath, sessionName)) {
+            autoConnectExistingSession();
+        }
+    }
 }
 
 export function deactivate(): void {
@@ -77,14 +93,17 @@ function registerTerminalProfile(context: vscode.ExtensionContext): void {
     context.subscriptions.push(
         vscode.window.registerTerminalProfileProvider('tmux-integrated.terminal', {
             async provideTerminalProfile(): Promise<vscode.TerminalProfile> {
-                const connected = await ensureClientConnected();
-                if (!connected) {
-                    throw new Error('tmux-integrated: Could not connect to tmux.');
-                }
+                try {
+                    log('provideTerminalProfile called');
+                    const connected = await ensureClientConnected();
+                    if (!connected) {
+                        throw new Error('tmux-integrated: Could not connect to tmux. See Output > tmux-integrated for details.');
+                    }
 
                 // Reuse the bootstrap window from a freshly-created session.
                 const bootstrap = takeBootstrapWindow();
                 if (bootstrap) {
+                    log(`provideTerminalProfile: using bootstrap window ${bootstrap.windowId}`);
                     return buildTerminalProfile(bootstrap);
                 }
 
@@ -92,11 +111,17 @@ function registerTerminalProfile(context: vscode.ExtensionContext): void {
                 // and schedule the rest to appear as additional tabs.
                 const adopted = adoptNextWindow();
                 if (adopted) {
+                    log(`provideTerminalProfile: adopting window ${adopted.windowId}`);
                     return buildTerminalProfile(adopted);
                 }
 
                 // Already connected and everything adopted — create a new window.
+                log('provideTerminalProfile: creating new terminal (no bootstrap/adopt)');
                 return buildTerminalProfile();
+                } catch (err) {
+                    log(`provideTerminalProfile error: ${err}`);
+                    throw err;
+                }
             },
         }),
     );
@@ -123,7 +148,24 @@ function registerCommands(context: vscode.ExtensionContext): void {
 
 async function ensureClientConnected(): Promise<boolean> {
     if (client?.isConnected()) {
-        return true;
+        // Verify the control-mode connection is actually alive.
+        try {
+            const probe = await Promise.race([
+                client.sendCommand('display-message -p "__ping__"'),
+                new Promise<never>((_, reject) =>
+                    setTimeout(() => reject(new Error('health-check timeout')), 5_000),
+                ),
+            ]);
+            if (probe[0]?.trim() === '__ping__') {
+                return true;
+            }
+            log(`Health check unexpected response: ${JSON.stringify(probe)}`);
+        } catch (err) {
+            log(`Health check failed (${err}), reconnecting…`);
+        }
+        // Connection is stale — tear it down and reconnect below.
+        client.disconnect();
+        client = null;
     }
 
     setStatus('$(sync~spin) tmux-integrated: connecting…');
@@ -132,7 +174,9 @@ async function ensureClientConnected(): Promise<boolean> {
     try {
         tmuxBinaryPath = resolveTmuxBinaryPath();
         tmuxVersion = execFileSync(tmuxBinaryPath, ['-V'], { encoding: 'utf8' }).trim();
-    } catch {
+        log(`tmux found: ${tmuxBinaryPath} (${tmuxVersion})`);
+    } catch (err) {
+        log(`tmux not found: ${err}`);
         setStatus('$(error) tmux-integrated: dependency missing');
         const choice = await vscode.window.showErrorMessage(
             'tmux-integrated: tmux is not installed or not in PATH.',
@@ -149,6 +193,7 @@ async function ensureClientConnected(): Promise<boolean> {
     // --- Determine session name and connect ---------------------------------
     currentSessionName = resolveSessionName();
     const sessionAlreadyExists = tmuxSessionExists(tmuxBinaryPath!, currentSessionName);
+    log(`Connecting to session "${currentSessionName}" (exists=${sessionAlreadyExists}, appRoot=${vscode.env.appRoot})`);
     client = new TmuxControlClient(
         currentSessionName,
         tmuxBinaryPath!,
@@ -170,7 +215,9 @@ async function ensureClientConnected(): Promise<boolean> {
 
     try {
         await client.connect({ startDirectory: defaultStartDirectory });
+        log('Connected to tmux successfully');
     } catch (err) {
+        log(`Connection failed: ${err}`);
         setStatus('$(error) tmux-integrated: failed');
         vscode.window.showErrorMessage(`tmux-integrated: Could not connect to tmux: ${err}`);
         return false;
@@ -181,21 +228,32 @@ async function ensureClientConnected(): Promise<boolean> {
     if (!sessionAlreadyExists) {
         try {
             const windows = await client.listWindows();
+            log(`New session — found ${windows.length} bootstrap window(s)`);
             if (windows.length === 1) {
                 bootstrapWindow = { windowId: windows[0].id, paneId: windows[0].paneId, windowIndex: windows[0].index };
             }
         } catch (err) {
-            console.error(`tmux-integrated: bootstrap window lookup failed: ${err}`);
+            log(`bootstrap window lookup failed: ${err}`);
         }
     } else {
         try {
             const windows = await client.listWindows();
+            log(`Existing session — found ${windows.length} window(s) to adopt`);
             windowsToAdopt = windows.map(w => ({ windowId: w.id, paneId: w.paneId, windowIndex: w.index }));
         } catch (err) {
-            console.error(`tmux-integrated: window enumeration failed: ${err}`);
+            log(`window enumeration failed: ${err}`);
         }
     }
     setStatus(`$(terminal) tmux-integrated: ${currentSessionName}`, tmuxVersion);
+
+    // Tell tmux to use xterm-256color inside panes so that programs (less,
+    // vim, etc.) query the same terminfo as a normal VS Code terminal.  The
+    // default (screen-256color / tmux-256color) advertises a different
+    // capability set that can cause subtle rendering differences.
+    await client.sendCommand(
+        'set-option -s default-terminal xterm-256color',
+        CommandFlags.TolerateErrors,
+    ).catch(() => {});
 
     // Push the current VS Code IPC variables into the session environment so
     // that `code <file>` and git credential helpers work in tmux windows.
@@ -235,6 +293,7 @@ function buildTerminalOptions(
                 },
             },
             () => disposing,
+            log,
         ),
     };
 }
@@ -358,33 +417,58 @@ function sanitizeName(name: string): string {
 }
 
 function resolveTmuxBinaryPath(): string {
-    const candidates = [
-        '/opt/homebrew/bin/tmux',
-        '/usr/local/bin/tmux',
-        '/usr/bin/tmux',
-        '/snap/bin/tmux',
-        '/home/linuxbrew/.linuxbrew/bin/tmux',
-    ];
-
-    for (const candidate of candidates) {
-        try {
-            execFileSync(candidate, ['-V'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
-            return candidate;
-        } catch {
-            // Try the next candidate.
-        }
-    }
-
-    const resolved = execSync('command -v tmux || which tmux', {
+    // Just use 'tmux' and let the OS resolve it from PATH.
+    // Verify it's actually callable.
+    execFileSync('tmux', ['-V'], {
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
+    });
+    return 'tmux';
+}
 
-    if (!resolved) {
-        throw new Error('tmux binary not found');
+function log(message: string): void {
+    outputChannel?.appendLine(`[${new Date().toISOString()}] ${message}`);
+}
+
+/**
+ * Like resolveTmuxBinaryPath but returns null instead of throwing
+ * when tmux is not found.
+ */
+function resolveTmuxBinaryPathSafe(): string | null {
+    try {
+        return resolveTmuxBinaryPath();
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Auto-connect to the existing tmux session for this workspace and
+ * open each existing tmux window as a VS Code terminal tab.
+ */
+async function autoConnectExistingSession(): Promise<void> {
+    log('Auto-connect: existing tmux session detected, connecting…');
+    const connected = await ensureClientConnected();
+    if (!connected) {
+        log('Auto-connect: connection failed');
+        return;
     }
 
-    return resolved.split(/\r?\n/u, 1)[0];
+    // ensureClientConnected() populated windowsToAdopt for existing sessions.
+    // Create a VS Code terminal tab for each window.
+    const windows = [...windowsToAdopt];
+    windowsToAdopt = [];
+    if (windows.length === 0) {
+        log('Auto-connect: connected but no windows to adopt');
+        return;
+    }
+
+    log(`Auto-connect: adopting ${windows.length} existing window(s)`);
+    for (const w of windows) {
+        if (!attachedWindowIds.has(w.windowId)) {
+            vscode.window.createTerminal(buildTerminalOptions(w));
+        }
+    }
 }
 
 function tmuxSessionExists(binaryPath: string, sessionName: string): boolean {
