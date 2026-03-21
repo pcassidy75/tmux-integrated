@@ -17,7 +17,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { execFileSync } from 'child_process';
 
-import { TmuxControlClient } from './tmuxControlClient';
+import { TmuxControlClient, CommandFlags } from './tmuxControlClient';
 import { TmuxTerminal } from './tmuxTerminalProvider';
 
 interface AttachWindowItem extends vscode.QuickPickItem {
@@ -245,6 +245,15 @@ async function ensureClientConnected(): Promise<boolean> {
         }
     }
     setStatus(`$(terminal) tmux-integrated: ${currentSessionName}`, tmuxVersion);
+
+    // Tell tmux to use xterm-256color inside panes so that programs (less,
+    // vim, etc.) query the same terminfo as a normal VS Code terminal.  The
+    // default (screen-256color / tmux-256color) advertises a different
+    // capability set that can cause subtle rendering differences.
+    await client.sendCommand(
+        'set-option -s default-terminal xterm-256color',
+        CommandFlags.TolerateErrors,
+    ).catch(() => {});
 
     // Push the current VS Code IPC variables into the session environment so
     // that `code <file>` and git credential helpers work in tmux windows.

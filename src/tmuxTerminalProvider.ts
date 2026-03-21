@@ -177,11 +177,12 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
             };
             this.client.on('window-close', this.windowCloseListener);
 
-            // When the entire tmux session exits, show a notice but keep the
-            // VS Code tab open so the user can see what happened.
+            // When the entire tmux session exits, close the VS Code tab
+            // (mirrors the window-close handler above).
             this.tmuxExitListener = () => {
+                this.windowClosedByTmux = true;
                 this.cleanup();
-                this.writeEmitter.fire('\r\n[tmux session ended]\r\n');
+                this.closeEmitter.fire(0);
             };
             this.client.on('tmux-exit', this.tmuxExitListener);
 
