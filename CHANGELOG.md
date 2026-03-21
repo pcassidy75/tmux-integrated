@@ -1,3 +1,4 @@
+## [0.1.8](https://github.com/pcassidy75/tmux-integrated/compare/v0.1.7...v0.1.8) (2026-03-21)
 ## [0.1.7](https://github.com/pcassidy75/tmux-integrated/compare/v0.1.4...v0.1.7) (2026-03-21)
 
 
