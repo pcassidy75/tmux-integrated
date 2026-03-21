@@ -71,6 +71,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             client = null;
         },
     });
+
+    // --- Auto-connect to existing tmux session on workspace open ----------
+    const cfg = vscode.workspace.getConfiguration('tmux-integrated');
+    if (cfg.get<boolean>('autoConnect', true)) {
+        const sessionName = resolveSessionName();
+        const tmuxPath = resolveTmuxBinaryPathSafe();
+        if (tmuxPath && tmuxSessionExists(tmuxPath, sessionName)) {
+            autoConnectExistingSession();
+        }
+    }
 }
 
 export function deactivate(): void {
@@ -409,6 +419,47 @@ function resolveTmuxBinaryPath(): string {
 
 function log(message: string): void {
     outputChannel?.appendLine(`[${new Date().toISOString()}] ${message}`);
+}
+
+/**
+ * Like resolveTmuxBinaryPath but returns null instead of throwing
+ * when tmux is not found.
+ */
+function resolveTmuxBinaryPathSafe(): string | null {
+    try {
+        return resolveTmuxBinaryPath();
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Auto-connect to the existing tmux session for this workspace and
+ * open each existing tmux window as a VS Code terminal tab.
+ */
+async function autoConnectExistingSession(): Promise<void> {
+    log('Auto-connect: existing tmux session detected, connecting…');
+    const connected = await ensureClientConnected();
+    if (!connected) {
+        log('Auto-connect: connection failed');
+        return;
+    }
+
+    // ensureClientConnected() populated windowsToAdopt for existing sessions.
+    // Create a VS Code terminal tab for each window.
+    const windows = [...windowsToAdopt];
+    windowsToAdopt = [];
+    if (windows.length === 0) {
+        log('Auto-connect: connected but no windows to adopt');
+        return;
+    }
+
+    log(`Auto-connect: adopting ${windows.length} existing window(s)`);
+    for (const w of windows) {
+        if (!attachedWindowIds.has(w.windowId)) {
+            vscode.window.createTerminal(buildTerminalOptions(w));
+        }
+    }
 }
 
 function tmuxSessionExists(binaryPath: string, sessionName: string): boolean {

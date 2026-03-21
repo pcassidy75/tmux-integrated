@@ -166,14 +166,13 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
             };
             this.client.on('output', this.outputListener);
 
-            // When the tmux window disappears (e.g. the shell exited),
-            // leave the VS Code tab open so the session is not torn down.
-            // The user can dismiss the "hung" tab with the trash-can icon.
+            // When the tmux window disappears (e.g. the shell exited
+            // or `tmux kill-window`), close the VS Code terminal tab.
             this.windowCloseListener = (id: string) => {
                 if (id === this.windowId) {
                     this.windowClosedByTmux = true;
                     this.cleanup();
-                    this.writeEmitter.fire('\r\n[Process completed]\r\n');
+                    this.closeEmitter.fire(0);
                 }
             };
             this.client.on('window-close', this.windowCloseListener);
@@ -245,11 +244,28 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
     }
 
     close(): void {
+        // Capture state before cleanup clears listeners.
+        const windowId = this.windowId;
+        const shouldConsiderKill = !this.windowClosedByTmux
+            && !!windowId
+            && this.client.isConnected();
+
         this.cleanup();
 
-        // Never kill the tmux window.  Whether the user clicked the
-        // trash-can icon or VS Code is shutting down, we leave the tmux
-        // window alive so it can be re-adopted on next launch.
+        if (shouldConsiderKill) {
+            // Defer briefly so that VS Code's shutdown path can call
+            // deactivate() and disconnect the client first.  This
+            // prevents killing tmux windows when VS Code exits —
+            // persistence is preserved.
+            const client = this.client;
+            const isDeactivating = this.isDeactivating;
+            setTimeout(() => {
+                if (!isDeactivating() && client.isConnected()) {
+                    client.sendCommand(`kill-window -t ${windowId}`)
+                        .catch(() => {});
+                }
+            }, 300);
+        }
     }
 
     // -----------------------------------------------------------------------
