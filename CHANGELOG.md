@@ -1,3 +1,9 @@
+## [0.1.7](https://github.com/pcassidy75/tmux-integrated/compare/v0.1.4...v0.1.7) (2026-03-21)
+
+
+### Features
+
+* Phase 1 - extract TmuxGateway, add command flags, batching, and write queuing ([207d82b](https://github.com/pcassidy75/tmux-integrated/commit/207d82bad6b0ea6145270b8f00bf1d9736cc936e))
 # Changelog
 
 All notable changes to this project will be documented in this file.
