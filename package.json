@@ -63,6 +63,11 @@
           "default": "",
           "description": "Shell to use inside tmux panes. Defaults to $SHELL or /bin/bash."
         },
+        "tmux-integrated.cwd": {
+          "type": "string",
+          "default": "",
+          "description": "Starting directory for new tmux terminals. Supports ${workspaceFolder}. Falls back to terminal.integrated.cwd if unset."
+        },
         "tmux-integrated.autoConnect": {
           "type": "boolean",
           "default": true,

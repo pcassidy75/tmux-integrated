@@ -96,6 +96,8 @@ then reload the VS Code window.
 |---|---|---|
 | `tmux-integrated.sessionName` | *(workspace folder name)* | Override the tmux session name |
 | `tmux-integrated.shell` | `$SHELL` or `/bin/bash` | Shell to run inside each tmux pane |
+| `tmux-integrated.cwd` | *(workspace folder)* | Starting directory for new tmux terminals. Supports `${workspaceFolder}`. If unset, falls back to `terminal.integrated.cwd`, then the workspace folder. |
+| `tmux-integrated.autoConnect` | `true` | Automatically connect to existing tmux sessions associated with the workspace when VS Code opens. |
 
 ## Commands
 
