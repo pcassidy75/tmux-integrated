@@ -410,21 +410,37 @@ function resolveSessionName(): string {
 function resolveStartDirectory(extensionPath: string): string {
     const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 
-    // 1. tmux-integrated.cwd (supports ${workspaceFolder})
+    // 1. tmux-integrated.cwd
     const cfg = vscode.workspace.getConfiguration('tmux-integrated');
     const cwdSetting = cfg.get<string>('cwd');
     if (cwdSetting) {
-        return cwdSetting.replace(/\$\{workspaceFolder\}/g, workspaceFolder ?? extensionPath);
+        return resolveVariables(cwdSetting, workspaceFolder, extensionPath);
     }
 
     // 2. terminal.integrated.cwd
     const termCwd = vscode.workspace.getConfiguration('terminal.integrated').get<string>('cwd');
     if (termCwd) {
-        return termCwd.replace(/\$\{workspaceFolder\}/g, workspaceFolder ?? extensionPath);
+        return resolveVariables(termCwd, workspaceFolder, extensionPath);
     }
 
     // 3. Workspace folder
     return workspaceFolder || extensionPath;
+}
+
+/**
+ * Resolve common VS Code predefined variables in a string value.
+ * See https://code.visualstudio.com/docs/editor/variables-reference
+ */
+function resolveVariables(value: string, workspaceFolder: string | undefined, fallbackDir: string): string {
+    const vars: Record<string, string | undefined> = {
+        workspaceFolder,
+        workspaceFolderBasename: workspaceFolder ? path.basename(workspaceFolder) : undefined,
+        userHome: process.env.HOME ?? process.env.USERPROFILE,
+        pathSeparator: path.sep,
+    };
+    return value.replace(/\$\{(\w+)\}/g, (_match, name: string) => {
+        return vars[name] ?? fallbackDir;
+    });
 }
 
 function sanitizeName(name: string): string {
