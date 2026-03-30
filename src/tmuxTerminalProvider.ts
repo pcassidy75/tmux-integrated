@@ -103,9 +103,13 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
     private windowCloseListener: ((id: string) => void) | null = null;
     private windowRenamedListener: ((payload: { windowId: string; name: string } | null) => void) | null = null;
     private tmuxExitListener: (() => void) | null = null;
+    private lastEmittedName: string | null = null;
+    private lastTmuxDrivenName: string | null = null;
+    private lastTmuxDrivenNameAt = 0;
     private lastCharWasCR = false;
     private resizeTimer: ReturnType<typeof setTimeout> | null = null;
     private readonly log: (message: string) => void;
+    private onInputCallback: (() => void) | null = null;
 
     constructor(
         private readonly client: TmuxControlClient,
@@ -136,6 +140,59 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
     /** Tmux window id (`@…`) after `open()` attaches; used to align session active window with VS Code tab focus. */
     getAttachedTmuxWindowId(): string | null {
         return this.windowId;
+    }
+
+    /**
+     * Rename this tmux window and update the VS Code tab label atomically.
+     * Called from the "tmux: Rename Terminal" command — single source of truth,
+     * no loop risk since both sides are updated in one place.
+     */
+    async renameWindow(newName: string): Promise<void> {
+        const name = this.normalizeTabLabel(newName);
+        if (!name || !this.windowId || !this.client.isConnected()) {
+            return;
+        }
+        await this.client
+            .sendCommand(`set-option -w -t ${this.windowId} automatic-rename off`, CommandFlags.TolerateErrors)
+            .catch(() => {});
+        await this.client
+            .sendCommand(`rename-window -t ${this.windowId} ${shellescape(name)}`, CommandFlags.TolerateErrors)
+            .catch(() => {});
+        // Update VS Code tab — mark as tmux-driven so the window-renamed echo is suppressed.
+        this.emitNameIfChanged(name, 'tmux');
+    }
+
+    /**
+     * Sync a name that was already applied on the VS Code side (e.g. via the
+     * built-in "Rename…" action) to the tmux window.  Updates internal state
+     * so the echoed `%window-renamed` event is suppressed.
+     */
+    async syncNameToTmux(newName: string): Promise<void> {
+        const name = this.normalizeTabLabel(newName);
+        if (!name || !this.windowId || !this.client.isConnected()) {
+            return;
+        }
+        // Record the name so the echoed %window-renamed is a no-op.
+        this.lastEmittedName = name;
+        this.lastTmuxDrivenName = name;
+        this.lastTmuxDrivenNameAt = Date.now();
+
+        await this.client
+            .sendCommand(`set-option -w -t ${this.windowId} automatic-rename off`, CommandFlags.TolerateErrors)
+            .catch(() => {});
+        await this.client
+            .sendCommand(`rename-window -t ${this.windowId} ${shellescape(name)}`, CommandFlags.TolerateErrors)
+            .catch(() => {});
+    }
+
+    /** Return the last name emitted to VS Code (used by tab-change detection). */
+    getLastEmittedName(): string | null {
+        return this.lastEmittedName;
+    }
+
+    /** Register a callback invoked on every handleInput — used to detect built-in renames. */
+    setOnInputCallback(cb: () => void): void {
+        this.onInputCallback = cb;
     }
 
     // -----------------------------------------------------------------------
@@ -206,8 +263,9 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
                 if (!payload || payload.windowId !== this.windowId) {
                     return;
                 }
-                this.nameEmitter.fire(
+                this.emitNameIfChanged(
                     pickTerminalTabTitle(payload.name, this.tabWindowIndex, false),
+                    'tmux',
                 );
             };
             this.client.on('window-renamed', this.windowRenamedListener);
@@ -241,7 +299,7 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
                 const label = pickTerminalTabTitle(candidate || undefined, windowIndex, automaticRename);
                 // Stop tmux from rewriting the title after we commit integrate name or user name.
                 await this.client.sendCommand(`set-option -w -t ${windowId} automatic-rename off`).catch(() => {});
-                this.nameEmitter.fire(label);
+                this.emitNameIfChanged(label, 'init');
                 const current = (await this.client.getWindowName(windowId).catch(() => '')).trim();
                 if (current !== label) {
                     await this.client
@@ -288,6 +346,7 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
 
     handleInput(data: string): void {
         if (!this.paneId) { return; }
+        this.onInputCallback?.();
         this.sendKeysInput(data);
     }
 
@@ -454,6 +513,23 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
         return result;
     }
 
+    private normalizeTabLabel(label: string): string {
+        return label.trim();
+    }
+
+    private emitNameIfChanged(label: string, source: 'tmux' | 'init'): void {
+        const normalized = this.normalizeTabLabel(label);
+        if (!normalized || normalized === this.lastEmittedName) {
+            return;
+        }
+        this.lastEmittedName = normalized;
+        if (source === 'tmux') {
+            this.lastTmuxDrivenName = normalized;
+            this.lastTmuxDrivenNameAt = Date.now();
+        }
+        this.nameEmitter.fire(normalized);
+    }
+
     private cleanup(): void {
         if (this.resizeTimer) {
             clearTimeout(this.resizeTimer);
@@ -486,6 +562,9 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
 
         this.lastCharWasCR = false;
         this.tabWindowIndex = undefined;
+        this.lastEmittedName = null;
+        this.lastTmuxDrivenName = null;
+        this.lastTmuxDrivenNameAt = 0;
 
         if (this.windowId && this.attachedWindowNotified) {
             this.lifecycleHooks.onWindowDetached?.(this.windowId);

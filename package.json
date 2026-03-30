@@ -48,8 +48,22 @@
         "command": "tmux-integrated.attachWindow",
         "title": "Attach to tmux Window",
         "category": "tmux"
+      },
+      {
+        "command": "tmux-integrated.renameTerminal",
+        "title": "Rename tmux Terminal",
+        "category": "tmux",
+        "icon": "$(edit)"
       }
     ],
+    "menus": {
+      "terminal/context": [
+        {
+          "command": "tmux-integrated.renameTerminal",
+          "group": "1_rename@1"
+        }
+      ]
+    },
     "configuration": {
       "title": "tmux-integrated",
       "properties": {
@@ -89,6 +103,7 @@
     "@types/node": "^20.x",
     "@types/vscode": "^1.80.0",
     "@vscode/vsce": "^3.7.1",
+    "ovsx": "^0.10.10",
     "typescript": "^5.1.0"
   }
 }
