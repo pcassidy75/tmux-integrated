@@ -30,11 +30,13 @@ jobs:
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
         run: npx vsce publish
+        continue-on-error: true
 
       - name: Publish extension to Open VSX
         env:
           OVSX_PAT: ${{ secrets.OVSX_PAT }}
         run: npx ovsx publish *.vsix -p "$OVSX_PAT"
+        continue-on-error: true
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
