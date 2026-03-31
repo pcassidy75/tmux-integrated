@@ -9,13 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Release 0.1.11.
+- Make marketplace publish steps independent with continue-on-error.
 
 ## [0.1.10] - 2026-03-30
 
 ### Changed
 
-- Release 0.1.10.
+- Bidirectional tab rename sync + Open VSX publishing.
 
 ## [0.1.9] - 2026-03-29
 
