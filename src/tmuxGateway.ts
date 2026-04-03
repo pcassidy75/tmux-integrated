@@ -396,12 +396,13 @@ export class TmuxGateway extends EventEmitter {
 function decodeOutput(encoded: string): Buffer {
     const bytes: number[] = [];
 
-    for (let index = 0; index < encoded.length; index++) {
+    for (let index = 0; index < encoded.length;) {
         const code = encoded.charCodeAt(index);
 
         // Skip bare (un-escaped) control characters — same as iTerm2's
         // `if (c < ' ') { continue; }` guard.
         if (code < 0x20) {
+            index++;
             continue;
         }
 
@@ -426,17 +427,20 @@ function decodeOutput(encoded: string): Buffer {
             }
             if (digits === 3) {
                 bytes.push(value);
-                index = scan - 1;   // outer for will increment
+                index = scan;
                 continue;
             }
             // Not a valid octal escape — fall through and emit '\' as-is.
         }
 
         // Printable character (or multi-byte UTF-8 glyph from tmux).
-        const buf = Buffer.from(encoded[index], 'utf8');
+        const codePoint = encoded.codePointAt(index);
+        const width = codePoint !== undefined && codePoint > 0xffff ? 2 : 1;
+        const buf = Buffer.from(encoded.slice(index, index + width), 'utf8');
         for (const b of buf) {
             bytes.push(b);
         }
+        index += width;
     }
 
     return Buffer.from(bytes);
