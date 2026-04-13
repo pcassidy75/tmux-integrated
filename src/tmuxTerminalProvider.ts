@@ -53,8 +53,9 @@ const KEY_MAP: Record<string, string> = {
  * `canSendAsLiteralCharacter:` in TmuxGateway.m — only alphanumerics
  * and a handful of punctuation known to be safe.
  *
- * Everything else (`;`, `$`, `#`, `"`, `'`, spaces, etc.) must be sent
- * as hex code points via `send-keys -t … 0xNN` to bypass the parser.
+ * Everything else (`;`, `$`, `#`, `"`, `'`, spaces, etc.) is sent as
+ * hex code points or, for non-ASCII printable text, via `send-keys -l`
+ * to preserve literal UTF-8 input.
  */
 function canSendAsLiteral(codePoint: number): boolean {
     if (codePoint >= 0x30 && codePoint <= 0x39) { return true; }   // 0-9
@@ -454,6 +455,20 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
                 const run = data.slice(index, litEnd);
                 commands.push(`send-keys -lt ${paneId} ${run}`);
                 index = litEnd;
+            } else if (cp > 0x7f) {
+                // Non-ASCII printable text should be forwarded literally so
+                // tmux receives the original UTF-8 input instead of ASCII-only
+                // hex key codes.
+                let textEnd = index + 1;
+                while (textEnd < data.length) {
+                    const nextCp = data.charCodeAt(textEnd);
+                    if (nextCp < 0x20 || nextCp <= 0x7f || canSendAsLiteral(nextCp)) { break; }
+                    if (SORTED_KEY_SEQUENCES.some((s) => data.startsWith(s, textEnd))) { break; }
+                    textEnd++;
+                }
+                const run = data.slice(index, textEnd);
+                commands.push(`send-keys -l -t ${paneId} ${shellescape(run)}`);
+                index = textEnd;
             } else {
                 // Collect consecutive hex characters (anything not safe-literal
                 // and not a control char or escape sequence).
@@ -461,7 +476,7 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
                 let hexEnd = index;
                 while (hexEnd < data.length) {
                     const nextCp = data.charCodeAt(hexEnd);
-                    if (nextCp < 0x20) { break; }
+                    if (nextCp < 0x20 || nextCp > 0x7f) { break; }
                     if (canSendAsLiteral(nextCp)) { break; }
                     if (SORTED_KEY_SEQUENCES.some((s) => data.startsWith(s, hexEnd))) { break; }
                     // Encode as UTF-8 bytes in hex.
