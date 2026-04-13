@@ -70,6 +70,61 @@ interface PendingCommand {
     reject: (err: Error) => void;
 }
 
+// The control-mode parser works on raw bytes so %output payloads are not
+// decoded as UTF-8 before pane-level boundary handling. Keep the repeated
+// byte markers/prefixes named to make the framing logic readable.
+const BYTE_LF = 0x0a;
+const BYTE_CR = 0x0d;
+const BYTE_ESC = 0x1b;
+const BYTE_P = 0x50;
+const BYTE_L = 0x6c;
+const BYTE_SPACE = 0x20;
+const BYTE_BACKSLASH = 0x5c;
+const BYTE_COLON = 0x3a;
+
+const OUTPUT_PREFIX = Buffer.from('%output ', 'ascii');
+const EXTENDED_OUTPUT_PREFIX = Buffer.from('%extended-output ', 'ascii');
+const WINDOW_ADD_PREFIX = '%window-add ';
+const WINDOW_CLOSE_PREFIX = '%window-close ';
+const UNLINKED_WINDOW_CLOSE_PREFIX = '%unlinked-window-close ';
+const WINDOW_RENAMED_PREFIX = '%window-renamed ';
+const LAYOUT_CHANGE_PREFIX = '%layout-change ';
+const WINDOW_PANE_CHANGED_PREFIX = '%window-pane-changed ';
+const SESSION_WINDOW_CHANGED_PREFIX = '%session-window-changed ';
+const SESSION_RENAMED_PREFIX = '%session-renamed ';
+const SESSION_CHANGED_PREFIX = '%session-changed ';
+const PANE_MODE_CHANGED_PREFIX = '%pane-mode-changed ';
+const PAUSE_PREFIX = '%pause ';
+const CONTINUE_PREFIX = '%continue ';
+const MESSAGE_PREFIX = '%message ';
+
+function stripDcsWrapper(line: Buffer): Buffer {
+    let stripped = line;
+
+    if (stripped.length >= 2 && stripped[0] === BYTE_ESC && stripped[1] === BYTE_P) {
+        let scan = 2;
+        while (scan < stripped.length && stripped[scan] !== BYTE_L) {
+            scan++;
+        }
+        if (scan < stripped.length) {
+            stripped = stripped.subarray(scan + 1);
+        }
+    }
+
+    if (
+        stripped.length >= 2
+        && stripped[stripped.length - 2] === BYTE_ESC
+        && stripped[stripped.length - 1] === BYTE_BACKSLASH
+    ) {
+        stripped = stripped.subarray(0, stripped.length - 2);
+    }
+
+    return stripped;
+}
+
+function hasPrefix(line: Buffer, prefix: Buffer): boolean {
+    return line.length >= prefix.length && line.subarray(0, prefix.length).equals(prefix);
+}
 
 // ---------------------------------------------------------------------------
 // TmuxGateway
@@ -77,7 +132,7 @@ interface PendingCommand {
 
 export class TmuxGateway extends EventEmitter {
     // Raw-data accumulation buffer.
-    private readBuffer = '';
+    private readBuffer = Buffer.alloc(0);
 
     // Lines accumulated inside a %begin…%end block.
     private responseBuffer: string[] = [];
@@ -123,15 +178,21 @@ export class TmuxGateway extends EventEmitter {
      * Feed raw PTY data into the parser.
      * Call this from the PTY onData callback.
      */
-    ingest(raw: string): void {
-        this.readBuffer += raw;
+    ingest(raw: string | Uint8Array): void {
+        const chunk = typeof raw === 'string' ? Buffer.from(raw, 'utf8') : Buffer.from(raw);
+        this.readBuffer = this.readBuffer.length === 0
+            ? chunk
+            : Buffer.concat([this.readBuffer, chunk]);
 
-        let lineEnd = this.readBuffer.indexOf('\n');
+        let lineEnd = this.readBuffer.indexOf(BYTE_LF);
         while (lineEnd !== -1) {
-            const line = this.readBuffer.slice(0, lineEnd).replace(/\r$/u, '');
-            this.readBuffer = this.readBuffer.slice(lineEnd + 1);
+            let line = this.readBuffer.subarray(0, lineEnd);
+            this.readBuffer = this.readBuffer.subarray(lineEnd + 1);
+            if (line.length > 0 && line[line.length - 1] === BYTE_CR) {
+                line = line.subarray(0, line.length - 1);
+            }
             this.parseLine(line);
-            lineEnd = this.readBuffer.indexOf('\n');
+            lineEnd = this.readBuffer.indexOf(BYTE_LF);
         }
     }
 
@@ -226,14 +287,27 @@ export class TmuxGateway extends EventEmitter {
     // Private — protocol parsing
     // -----------------------------------------------------------------------
 
-    private parseLine(line: string): void {
-        if (!line) { return; }
+    private parseLine(line: Buffer): void {
+        if (line.length === 0) { return; }
 
-        // Strip DCS wrapper (\x1bP…l … \x1b\\) emitted when tmux detects a tty.
-        if (line.startsWith('\x1bP')) {
-            line = line.replace(/^\x1bP[^l]*l/, '').replace(/\x1b\\$/, '');
+        line = stripDcsWrapper(line);
+        if (line.length === 0) {
+            return;
         }
 
+        if (hasPrefix(line, OUTPUT_PREFIX)) {
+            this.parseOutput(line);
+            return;
+        }
+        if (hasPrefix(line, EXTENDED_OUTPUT_PREFIX)) {
+            this.parseExtendedOutput(line);
+            return;
+        }
+
+        this.parseControlLine(line.toString('utf8'));
+    }
+
+    private parseControlLine(line: string): void {
         if (line.startsWith('%begin')) {
             this.inBlock = true;
             this.responseBuffer = [];
@@ -279,94 +353,90 @@ export class TmuxGateway extends EventEmitter {
     }
 
     private parseNotification(line: string): void {
-        if (line.startsWith('%output ')) {
-            this.parseOutput(line);
-        } else if (line.startsWith('%extended-output ')) {
-            this.parseExtendedOutput(line);
-        } else if (line.startsWith('%window-add ')) {
-            this.emit('window-add', line.slice('%window-add '.length).trim());
-        } else if (line.startsWith('%window-close ') || line.startsWith('%unlinked-window-close ')) {
-            const prefix = line.startsWith('%window-close ') ? '%window-close ' : '%unlinked-window-close ';
+        if (line.startsWith(WINDOW_ADD_PREFIX)) {
+            this.emit('window-add', line.slice(WINDOW_ADD_PREFIX.length).trim());
+        } else if (line.startsWith(WINDOW_CLOSE_PREFIX) || line.startsWith(UNLINKED_WINDOW_CLOSE_PREFIX)) {
+            const prefix = line.startsWith(WINDOW_CLOSE_PREFIX) ? WINDOW_CLOSE_PREFIX : UNLINKED_WINDOW_CLOSE_PREFIX;
             const windowId = line.slice(prefix.length).trim().split(/\s+/u)[0];
             this.emit('window-close', windowId);
-        } else if (line.startsWith('%window-renamed ')) {
+        } else if (line.startsWith(WINDOW_RENAMED_PREFIX)) {
             this.emit('window-renamed', parseWindowRenamed(line));
-        } else if (line.startsWith('%layout-change ')) {
+        } else if (line.startsWith(LAYOUT_CHANGE_PREFIX)) {
             const layoutChange = parseLayoutChange(line);
             if (layoutChange) {
                 this.emit('layout-change', layoutChange);
             }
-        } else if (line.startsWith('%window-pane-changed ')) {
+        } else if (line.startsWith(WINDOW_PANE_CHANGED_PREFIX)) {
             const paneChange = parseWindowPaneChange(line);
             if (paneChange) {
                 this.emit('window-pane-changed', paneChange);
             }
-        } else if (line.startsWith('%session-window-changed ')) {
+        } else if (line.startsWith(SESSION_WINDOW_CHANGED_PREFIX)) {
             this.emit('session-window-changed', parseSessionWindowChanged(line));
-        } else if (line.startsWith('%session-renamed ')) {
-            this.emit('session-renamed', line.slice('%session-renamed '.length));
+        } else if (line.startsWith(SESSION_RENAMED_PREFIX)) {
+            this.emit('session-renamed', line.slice(SESSION_RENAMED_PREFIX.length));
         } else if (line.startsWith('%sessions-changed')) {
             this.emit('sessions-changed');
-        } else if (line.startsWith('%session-changed')) {
+        } else if (line.startsWith(SESSION_CHANGED_PREFIX)) {
             // %session-changed $N name — the session is now fully initialised.
             // Flush the write queue so deferred commands reach tmux.
             this.flushWriteQueue();
-            this.emit('session-changed', line.slice('%session-changed '.length).trim());
-        } else if (line.startsWith('%pane-mode-changed ')) {
-            this.emit('pane-mode-changed', line.slice('%pane-mode-changed '.length).trim());
+            this.emit('session-changed', line.slice(SESSION_CHANGED_PREFIX.length).trim());
+        } else if (line.startsWith(PANE_MODE_CHANGED_PREFIX)) {
+            this.emit('pane-mode-changed', line.slice(PANE_MODE_CHANGED_PREFIX.length).trim());
         } else if (line.startsWith('%paste-buffer-changed')) {
             this.emit('paste-buffer-changed');
-        } else if (line.startsWith('%pause ')) {
-            this.emit('pause', line.slice('%pause '.length).trim());
-        } else if (line.startsWith('%continue ')) {
-            this.emit('continue', line.slice('%continue '.length).trim());
-        } else if (line.startsWith('%message ')) {
-            this.emit('message', line.slice('%message '.length));
+        } else if (line.startsWith(PAUSE_PREFIX)) {
+            this.emit('pause', line.slice(PAUSE_PREFIX.length).trim());
+        } else if (line.startsWith(CONTINUE_PREFIX)) {
+            this.emit('continue', line.slice(CONTINUE_PREFIX.length).trim());
+        } else if (line.startsWith(MESSAGE_PREFIX)) {
+            this.emit('message', line.slice(MESSAGE_PREFIX.length));
         } else if (line.startsWith('%exit')) {
             this.emit('tmux-exit');
         }
     }
 
-    private parseOutput(line: string): void {
-        const rest = line.slice('%output '.length);
-        const sp = rest.indexOf(' ');
+    private parseOutput(line: Buffer): void {
+        const rest = line.subarray(OUTPUT_PREFIX.length);
+        const sp = rest.indexOf(BYTE_SPACE);
         if (sp === -1) {
             return;
         }
 
-        const paneId = rest.slice(0, sp);
-        const encoded = rest.slice(sp + 1);
+        const paneId = rest.subarray(0, sp).toString('utf8');
+        const encoded = rest.subarray(sp + 1);
         const data = this.decodePaneOutput(paneId, encoded);
         this.emit('output', { paneId, data } as TmuxPaneOutput);
     }
 
-    private parseExtendedOutput(line: string): void {
-        const rest = line.slice('%extended-output '.length);
-        const firstSpace = rest.indexOf(' ');
+    private parseExtendedOutput(line: Buffer): void {
+        const rest = line.subarray(EXTENDED_OUTPUT_PREFIX.length);
+        const firstSpace = rest.indexOf(BYTE_SPACE);
         if (firstSpace === -1) {
             return;
         }
 
-        const paneId = rest.slice(0, firstSpace);
+        const paneId = rest.subarray(0, firstSpace).toString('utf8');
         if (!paneId.startsWith('%')) {
             return;
         }
 
-        const colonIndex = rest.indexOf(':');
+        const colonIndex = rest.indexOf(BYTE_COLON);
         if (colonIndex === -1) {
             return;
         }
 
-        let encoded = rest.slice(colonIndex + 1);
-        if (encoded.startsWith(' ')) {
-            encoded = encoded.slice(1);
+        let encoded = rest.subarray(colonIndex + 1);
+        if (encoded.length > 0 && encoded[0] === BYTE_SPACE) {
+            encoded = encoded.subarray(1);
         }
 
         const data = this.decodePaneOutput(paneId, encoded);
         this.emit('output', { paneId, data } as TmuxPaneOutput);
     }
 
-    private decodePaneOutput(paneId: string, encoded: string): string {
+    private decodePaneOutput(paneId: string, encoded: Buffer): string {
         let decoder = this.paneDecoders.get(paneId);
         if (!decoder) {
             decoder = new StringDecoder('utf8');
@@ -393,31 +463,32 @@ export class TmuxGateway extends EventEmitter {
  *     driver are ignored, matching iTerm2's comment: "Ignore \r's that the
  *     line driver sprinkles in at its pleasure."
  */
-function decodeOutput(encoded: string): Buffer {
+function decodeOutput(encoded: Buffer): Buffer {
     const bytes: number[] = [];
 
-    for (let index = 0; index < encoded.length; index++) {
-        const code = encoded.charCodeAt(index);
+    for (let index = 0; index < encoded.length; ) {
+        const code = encoded[index];
 
         // Skip bare (un-escaped) control characters — same as iTerm2's
         // `if (c < ' ') { continue; }` guard.
-        if (code < 0x20) {
+        if (code !== undefined && code < BYTE_SPACE) {
+            index++;
             continue;
         }
 
-        if (encoded[index] === '\\') {
+        if (code === BYTE_BACKSLASH) {
             // Try to read exactly 3 octal digits, skipping any bare \r
             // characters the line driver may have inserted.
             let value = 0;
             let digits = 0;
             let scan = index + 1;
             while (digits < 3 && scan < encoded.length) {
-                const ch = encoded.charCodeAt(scan);
-                if (ch === 0x0d) {     // bare \r — skip
+                const ch = encoded[scan];
+                if (ch === BYTE_CR) {     // bare \r — skip
                     scan++;
                     continue;
                 }
-                if (ch < 0x30 || ch > 0x37) {  // not '0'..'7'
+                if (ch === undefined || ch < 0x30 || ch > 0x37) {  // not '0'..'7'
                     break;
                 }
                 value = value * 8 + (ch - 0x30);
@@ -426,17 +497,14 @@ function decodeOutput(encoded: string): Buffer {
             }
             if (digits === 3) {
                 bytes.push(value);
-                index = scan - 1;   // outer for will increment
+                index = scan;
                 continue;
             }
             // Not a valid octal escape — fall through and emit '\' as-is.
         }
 
-        // Printable character (or multi-byte UTF-8 glyph from tmux).
-        const buf = Buffer.from(encoded[index], 'utf8');
-        for (const b of buf) {
-            bytes.push(b);
-        }
+        bytes.push(code);
+        index++;
     }
 
     return Buffer.from(bytes);

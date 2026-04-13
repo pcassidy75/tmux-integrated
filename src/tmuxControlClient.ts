@@ -42,7 +42,7 @@ export { CommandFlags } from './tmuxGateway';
  * runtime from VS Code's bundled copy, so we only declare the subset we use.
  */
 interface IPty {
-    onData: (callback: (data: string) => void) => { dispose(): void };
+    onData: (callback: (data: string | Uint8Array) => void) => { dispose(): void };
     onExit: (callback: (ev: { exitCode: number; signal?: number }) => void) => { dispose(): void };
     write(data: string): void;
     resize(cols: number, rows: number): void;
@@ -158,7 +158,14 @@ export class TmuxControlClient extends EventEmitter {
                 spawn(
                     file: string,
                     args: string[],
-                    options: { name?: string; cols?: number; rows?: number; cwd?: string; env?: Record<string, string> },
+                    options: {
+                        name?: string;
+                        cols?: number;
+                        rows?: number;
+                        cwd?: string;
+                        env?: Record<string, string>;
+                        encoding?: string | null;
+                    },
                 ): IPty;
             };
 
@@ -168,6 +175,10 @@ export class TmuxControlClient extends EventEmitter {
                 rows: 50,
                 cwd: options?.startDirectory || process.env.HOME || process.cwd(),
                 env: process.env as Record<string, string>,
+                // Keep the control channel as raw bytes so TmuxGateway can
+                // frame lines and decode %output payloads without losing
+                // UTF-8 characters at tmux notification boundaries.
+                encoding: null,
             });
 
             // Create a fresh gateway for this connection.
@@ -205,7 +216,7 @@ export class TmuxControlClient extends EventEmitter {
             }
 
             // Feed PTY output into the gateway.
-            this.pty.onData((data: string) => {
+            this.pty.onData((data: string | Uint8Array) => {
                 gw.ingest(data);
             });
 
