@@ -12,7 +12,7 @@ const { version } = require(path.join(root, 'package.json'));
 const date = new Date().toISOString().slice(0, 10);
 
 // Find the previous tag to scope git log
-const tags = execSync('git tag -l "v*" --sort=-v:refnum', { cwd: root, encoding: 'utf8' })
+const tags = execSync('git tag -l "v*" --sort=-v:refname', { cwd: root, encoding: 'utf8' })
   .split('\n')
   .filter(Boolean);
 
