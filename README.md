@@ -98,6 +98,7 @@ then reload the VS Code window.
 | `tmux-integrated.shell` | `$SHELL` or `/bin/bash` | Shell to run inside each tmux pane |
 | `tmux-integrated.cwd` | *(workspace folder)* | Starting directory for new tmux terminals. Supports `${workspaceFolder}`. If unset, falls back to `terminal.integrated.cwd`, then the workspace folder. |
 | `tmux-integrated.autoConnect` | `true` | Automatically connect to existing tmux sessions associated with the workspace when VS Code opens. |
+| `terminal.integrated.defaultLocation` | `"terminal"` | VS Code built-in setting. Set to `"editor"` to open tmux terminals in the editor area instead of the terminal panel. |
 
 ## Commands
 
