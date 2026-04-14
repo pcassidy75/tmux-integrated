@@ -17,7 +17,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { execFileSync } from 'child_process';
 
-import { TmuxControlClient, CommandFlags } from './tmuxControlClient';
+import { TmuxControlClient, CommandFlags, shellescape } from './tmuxControlClient';
 import { TmuxTerminal } from './tmuxTerminalProvider';
 
 interface AttachWindowItem extends vscode.QuickPickItem {
@@ -382,6 +382,15 @@ async function ensureClientConnected(): Promise<boolean> {
         await client.updateEnvironment(envSnapshot).catch(
             (err) => console.error(`tmux-integrated: set-environment error: ${err}`),
         );
+
+        // For pre-existing sessions the running shells have already inherited
+        // their environment and won't pick up the set-environment update.
+        // Inject the export commands directly into each idle shell pane so
+        // that `code <file>` (and Ctrl+click file-open) keeps working.
+        if (sessionAlreadyExists) {
+            const allWindows = [...windowsToAdopt];
+            await refreshEnvInRunningPanes(allWindows, envSnapshot);
+        }
     }
     return true;
 }
@@ -660,4 +669,66 @@ function collectVscodeEnvVars(): Record<string, string> {
         if (v) { vars[k] = v; }
     }
     return vars;
+}
+
+/**
+ * Inject VS Code IPC environment variables into each pane that is currently
+ * running an interactive shell.
+ *
+ * When VS Code attaches to a pre-existing tmux session the session environment
+ * is updated via `set-environment`, but shells that are already running have
+ * already inherited their process environment and will not pick up the new
+ * value of VSCODE_IPC_HOOK_CLI.  Without this update, `code <file>` fails
+ * with ECONNREFUSED because the socket path is stale or absent.
+ *
+ * We use `send-keys` to inject a ` export KEY=VALUE` line (space-prefixed so
+ * it is skipped by bash/zsh history when HISTCONTROL=ignorespace is set).
+ * The injection is limited to panes whose `pane_current_command` is a
+ * recognised shell binary — this avoids disturbing panes that are running
+ * editors, long-running programs, or other interactive applications.
+ */
+async function refreshEnvInRunningPanes(
+    windows: { windowId: string; paneId: string; windowIndex: number }[],
+    envVars: Record<string, string>,
+): Promise<void> {
+    if (!client?.isConnected() || Object.keys(envVars).length === 0) {
+        return;
+    }
+
+    // Space prefix: skips bash/zsh history when HISTCONTROL=ignorespace.
+    const exportLine = ' ' + Object.entries(envVars)
+        .map(([k, v]) => `export ${k}=${shellescape(v)}`)
+        .join('; ');
+
+    const KNOWN_SHELLS = new Set([
+        'bash', 'zsh', 'sh', 'fish', 'dash',
+        'ksh', 'ksh93', 'csh', 'tcsh', 'nu', 'elvish', 'ion',
+    ]);
+
+    for (const w of windows) {
+        // Pane IDs from tmux are always %N (e.g. %0, %12) — validate to
+        // guard against malformed data from the tmux protocol parser.
+        if (!/^%\d+$/.test(w.paneId)) {
+            log(`refreshEnvInRunningPanes: skipping pane with unexpected ID format: ${w.paneId}`);
+            continue;
+        }
+        try {
+            const res = await client.sendCommand(
+                `display-message -t ${w.paneId} -p "#{pane_current_command}"`,
+                CommandFlags.TolerateErrors,
+            );
+            const cmd = (res[0] ?? '').trim();
+            if (!KNOWN_SHELLS.has(cmd)) {
+                log(`refreshEnvInRunningPanes: skipping pane ${w.paneId} (command: ${cmd || 'unknown'})`);
+                continue;
+            }
+            await client.sendCommand(
+                `send-keys -t ${w.paneId} ${shellescape(exportLine)} Enter`,
+                CommandFlags.TolerateErrors,
+            );
+            log(`refreshEnvInRunningPanes: refreshed env in pane ${w.paneId} (${cmd})`);
+        } catch (err) {
+            log(`refreshEnvInRunningPanes: failed for pane ${w.paneId}: ${err}`);
+        }
+    }
 }
