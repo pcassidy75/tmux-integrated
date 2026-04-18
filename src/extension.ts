@@ -294,13 +294,16 @@ async function ensureClientConnected(): Promise<boolean> {
         log(`tmux not found: ${err}`);
         setStatus('$(error) tmux-integrated: dependency missing');
         const choice = await vscode.window.showErrorMessage(
-            'tmux-integrated: tmux is not installed or not in PATH.',
+            'tmux-integrated: tmux is not installed or not in PATH. You can set an absolute path via the tmux-integrated.tmuxPath settings.',
             'Show tmux install instructions',
+            'Open Settings',
         );
-        if (choice) {
+        if (choice === 'Show tmux install instructions') {
             vscode.env.openExternal(
                 vscode.Uri.parse('https://github.com/tmux/tmux/wiki/Installing'),
             );
+        } else if (choice === 'Open Settings') {
+            vscode.commands.executeCommand('workbench.action.openSettings', 'tmux-integrated.tmuxPath');
         }
         return false;
     }
@@ -572,13 +575,20 @@ function sanitizeName(name: string): string {
 }
 
 function resolveTmuxBinaryPath(): string {
-    // Just use 'tmux' and let the OS resolve it from PATH.
-    // Verify it's actually callable.
-    execFileSync('tmux', ['-V'], {
+    // Check for a platform-specific path override in the configuration.
+    const cfg = vscode.workspace.getConfiguration('tmux-integrated');
+    const platformKey =
+        process.platform === 'darwin' ? 'tmuxPath.osx' :
+        process.platform === 'win32'  ? 'tmuxPath.windows' :
+                                        'tmuxPath.linux';  // Linux, FreeBSD, etc.
+    const configuredPath = cfg.get<string>(platformKey)?.trim();
+
+    const candidate = configuredPath || 'tmux';
+    execFileSync(candidate, ['-V'], {
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'ignore'],
     });
-    return 'tmux';
+    return candidate;
 }
 
 function log(message: string): void {
