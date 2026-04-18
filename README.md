@@ -90,6 +90,30 @@ an unexpected session name), VS Code is probably picking a shell profile named
 Make sure the profile name is exactly `"tmux-integrated"` in your settings,
 then reload the VS Code window.
 
+### tmux not found when launching VS Code from the macOS Dock
+
+When VS Code is launched from the Dock (rather than a terminal), it inherits a
+minimal `PATH` from launchd that may not include Homebrew (`/opt/homebrew/bin`).
+If you see an error like _"tmux is not installed or not in PATH"_ but tmux works
+fine in your terminal, set the absolute path to the tmux binary:
+
+```jsonc
+// settings.json
+{
+  "tmux-integrated.tmuxPath.osx": "/opt/homebrew/bin/tmux"
+}
+```
+
+An alternative fix is to add the following to your `~/.zprofile` so that
+Homebrew's `shellenv` initialises the PATH for GUI apps (use the path that
+matches your Mac's architecture — `/opt/homebrew` for Apple Silicon,
+`/usr/local` for Intel):
+
+```sh
+eval "$(/opt/homebrew/bin/brew shellenv)"   # Apple Silicon
+# eval "$(/usr/local/bin/brew shellenv)"    # Intel
+```
+
 ## Extension settings
 
 | Setting | Default | Description |
@@ -98,6 +122,9 @@ then reload the VS Code window.
 | `tmux-integrated.shell` | `$SHELL` or `/bin/bash` | Shell to run inside each tmux pane |
 | `tmux-integrated.cwd` | *(workspace folder)* | Starting directory for new tmux terminals. Supports `${workspaceFolder}`. If unset, falls back to `terminal.integrated.cwd`, then the workspace folder. |
 | `tmux-integrated.autoConnect` | `true` | Automatically connect to existing tmux sessions associated with the workspace when VS Code opens. |
+| `tmux-integrated.tmuxPath.osx` | *(empty — use PATH)* | Absolute path to the tmux binary on macOS (e.g. `/opt/homebrew/bin/tmux`). Useful when VS Code is launched from the Dock and does not inherit your shell PATH. |
+| `tmux-integrated.tmuxPath.linux` | *(empty — use PATH)* | Absolute path to the tmux binary on Linux (e.g. `/usr/local/bin/tmux`). |
+| `tmux-integrated.tmuxPath.windows` | *(empty — use PATH)* | Absolute path to the tmux binary on Windows/WSL (e.g. `/usr/bin/tmux`). |
 
 ## Commands
 
