@@ -455,13 +455,22 @@ export class TmuxGateway extends EventEmitter {
 /**
  * Decode data from a tmux %output or %extended-output notification.
  *
- * Matches iTerm2's `decodeEscapedOutput:` (TmuxGateway.m):
- *   - Bare control characters (< 0x20) are silently skipped.  tmux always
- *     octal-encodes control bytes; bare ones are artefacts injected by the
- *     PTY line driver (e.g. ONLCR converting \n → \r\n).
- *   - Within an octal escape (\NNN), bare \r characters added by the line
- *     driver are ignored, matching iTerm2's comment: "Ignore \r's that the
- *     line driver sprinkles in at its pleasure."
+ * Modelled on iTerm2's `decodeEscapedOutput:` (TmuxGateway.m), but
+ * deliberately more conservative about which bare bytes it drops:
+ *   - tmux octal-encodes control bytes in the %output payload, but in
+ *     practice bare control bytes can still appear (e.g. when tmux passes
+ *     through certain terminal protocol responses).  The original iTerm2
+ *     guard skipped *all* bytes < 0x20, which strips the leading ESC of
+ *     responses like a cursor-position report (`ESC[<row>;<col>R`) and
+ *     leaves the visible tail in the terminal — see issue #26.
+ *   - The only documented case the guard was actually targeting is the
+ *     bare `\r` that the PTY line driver "sprinkles in at its pleasure"
+ *     (e.g. ONLCR converting `\n` → `\r\n`).  We restrict the filter to
+ *     that single case and let every other byte — most importantly ESC
+ *     (0x1b) — pass through so terminal protocol sequences arrive intact.
+ *   - Within an octal escape (\NNN), bare `\r` is similarly ignored,
+ *     matching iTerm2's comment: "Ignore \r's that the line driver
+ *     sprinkles in at its pleasure."
  */
 function decodeOutput(encoded: Buffer): Buffer {
     const bytes: number[] = [];
@@ -469,9 +478,10 @@ function decodeOutput(encoded: Buffer): Buffer {
     for (let index = 0; index < encoded.length; ) {
         const code = encoded[index];
 
-        // Skip bare (un-escaped) control characters — same as iTerm2's
-        // `if (c < ' ') { continue; }` guard.
-        if (code !== undefined && code < BYTE_SPACE) {
+        // Drop bare CR injected by the PTY line driver. Other control
+        // bytes (notably ESC 0x1b) must be preserved so that terminal
+        // protocol responses such as CPR are not truncated.
+        if (code === BYTE_CR) {
             index++;
             continue;
         }

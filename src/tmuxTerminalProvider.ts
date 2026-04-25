@@ -72,6 +72,65 @@ function canSendAsLiteral(codePoint: number): boolean {
 const SORTED_KEY_SEQUENCES: string[] =
     Object.keys(KEY_MAP).sort((a, b) => b.length - a.length);
 
+/**
+ * If `data[start]` begins an ESC sequence that isn't a known multi-byte
+ * KEY_MAP entry, return its length.  Otherwise return 0.
+ *
+ * Recognises:
+ *   - CSI:  ESC [ <params> <final 0x40..0x7E>          (e.g. \x1b[24;80R)
+ *   - SS3:  ESC O <one-byte-final>                      (e.g. \x1bOA)
+ *   - OSC:  ESC ] <text> ST | BEL                       (e.g. \x1b]0;title\x07)
+ *   - DCS / SOS / PM / APC:  ESC <P|X|^|_> <text> ST
+ *
+ * Used by `sendKeysInput` to forward such sequences atomically as a single
+ * hex-encoded `send-keys`, so an interactive app inside tmux receives the
+ * full sequence in one read() instead of several adjacent writes — see
+ * issue #26 (xterm.js's auto CPR reply `\x1b[<r>;<c>R` was being delivered
+ * as separate ESC + `[` + params writes and parsed wrongly by `gh`'s prompt
+ * library).
+ *
+ * Returns 0 if `data[start]` is bare ESC followed by nothing or by a
+ * recognised KEY_MAP sequence, so the existing key-name path handles those.
+ */
+function findEscSequenceLength(data: string, start: number): number {
+    if (data[start] !== '\x1b' || start + 1 >= data.length) {
+        return 0;
+    }
+    if (SORTED_KEY_SEQUENCES.some((seq) => seq.length > 1 && data.startsWith(seq, start))) {
+        return 0;
+    }
+
+    const next = data[start + 1];
+
+    if (next === '[') {
+        for (let i = start + 2; i < data.length; i++) {
+            const cp = data.charCodeAt(i);
+            if (cp >= 0x40 && cp <= 0x7e) {
+                return i - start + 1;
+            }
+        }
+        return 0;
+    }
+
+    if (next === 'O' && start + 2 < data.length) {
+        return 3;
+    }
+
+    if (next === ']' || next === 'P' || next === 'X' || next === '^' || next === '_') {
+        for (let i = start + 2; i < data.length; i++) {
+            if (next === ']' && data.charCodeAt(i) === 0x07) {
+                return i - start + 1;
+            }
+            if (data[i] === '\x1b' && i + 1 < data.length && data[i + 1] === '\\') {
+                return i - start + 2;
+            }
+        }
+        return 0;
+    }
+
+    return 0;
+}
+
 export class TmuxTerminal implements vscode.Pseudoterminal {
     private readonly writeEmitter = new vscode.EventEmitter<string>();
     private readonly closeEmitter = new vscode.EventEmitter<number | void>();
@@ -399,6 +458,9 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
 
     /**
      * Send input to the tmux pane using the iTerm2 hybrid strategy:
+     *   - Unknown ESC sequences (CSI, SS3, OSC, DCS, …) → single hex
+     *     `send-keys -t <pane> 0x1b 0x5b …` so the whole sequence is
+     *     written to the pane's pty atomically (see issue #26).
      *   - Known escape sequences → `send-keys -t <pane> <KeyName>`
      *   - Safe literal runs     → `send-keys -lt <pane> <chars>`
      *   - Everything else       → `send-keys -t <pane> 0xNN 0xNN …`
@@ -415,7 +477,30 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
         let index = 0;
 
         while (index < data.length) {
-            // 1. Check for known escape sequences (function keys, arrows, etc.)
+            // 1. Forward unknown ESC sequences (CSI, SS3, OSC, DCS, …) atomically
+            //    as a single hex-encoded `send-keys`.  This is critical for
+            //    terminal protocol responses such as the cursor-position report
+            //    (`\x1b[<row>;<col>R`) that xterm.js auto-replies with: if we
+            //    instead split the sequence across multiple `send-keys` commands
+            //    (Escape + 0x5b + literals + …), tmux performs separate writes
+            //    to the pane's pty and the foreground app's input parser reads
+            //    them as separate chunks, often dropping the leading bytes —
+            //    leaving fragments like `;<col>R` to land in stdin (issue #26).
+            const escLen = findEscSequenceLength(data, index);
+            if (escLen > 0) {
+                const hexCodes: string[] = [];
+                for (let i = 0; i < escLen; i++) {
+                    const buf = Buffer.from(data[index + i], 'utf8');
+                    for (const b of buf) {
+                        hexCodes.push(`0x${b.toString(16).padStart(2, '0')}`);
+                    }
+                }
+                commands.push(`send-keys -t ${paneId} ${hexCodes.join(' ')}`);
+                index += escLen;
+                continue;
+            }
+
+            // 2. Check for known escape sequences (function keys, arrows, etc.)
             const sequence = SORTED_KEY_SEQUENCES.find((candidate) => data.startsWith(candidate, index));
             if (sequence) {
                 commands.push(`send-keys -t ${paneId} ${KEY_MAP[sequence]}`);
@@ -425,14 +510,14 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
 
             const char = data[index];
 
-            // 2. Bare \n → Enter
+            // 3. Bare \n → Enter
             if (char === '\n') {
                 commands.push(`send-keys -t ${paneId} Enter`);
                 index += 1;
                 continue;
             }
 
-            // 3. Control characters (< 0x20) → C-x key names
+            // 4. Control characters (< 0x20) → C-x key names
             if (char.charCodeAt(0) < 0x20) {
                 const letter = String.fromCharCode(char.charCodeAt(0) + 64).toLowerCase();
                 commands.push(`send-keys -t ${paneId} C-${letter}`);
@@ -440,7 +525,7 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
                 continue;
             }
 
-            // 4. Collect a run of printable characters.  Classify each as
+            // 5. Collect a run of printable characters.  Classify each as
             //    "safe literal" or "needs hex".  Build runs of the same kind.
             const cp = char.charCodeAt(0);
             if (canSendAsLiteral(cp)) {
