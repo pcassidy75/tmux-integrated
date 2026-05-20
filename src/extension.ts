@@ -415,9 +415,16 @@ function buildTerminalOptions(
     );
     registerPendingTerminalPty(pty);
 
+    const integratedCfg = vscode.workspace.getConfiguration('terminal.integrated');
+    const defaultLocation = integratedCfg.get<string>('defaultLocation', 'terminal');
+    const location = defaultLocation === 'editor'
+        ? vscode.TerminalLocation.Editor
+        : vscode.TerminalLocation.Panel;
+
     return {
         name: existingWindow?.windowIndex !== undefined ? `tmux:${existingWindow.windowIndex}` : 'tmux',
         pty,
+        location,
     };
 }
 
