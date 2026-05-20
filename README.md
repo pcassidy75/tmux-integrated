@@ -118,6 +118,13 @@ work exactly as they do in a normal VS Code terminal.
 
 Contributions are welcome — open an issue or submit a pull request.
 
+## Contributors
+
+Thanks to everyone who has contributed a merged pull request:
+
+- [@x6ax6b](https://github.com/x6ax6b) — UTF-8 boundary preservation and non-ASCII input handling
+- [@pcassidy75](https://github.com/pcassidy75) — project creator and maintainer
+
 ## License
 
 This project is licensed under the **GNU General Public License v3.0 (GPL-3.0-only)**.
