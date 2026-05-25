@@ -86,6 +86,21 @@
           "type": "boolean",
           "default": true,
           "description": "Automatically connect to existing tmux sessions associated with the workspace when VS Code opens."
+        },
+        "tmux-integrated.tmuxPath.osx": {
+          "type": "string",
+          "default": "",
+          "description": "Absolute path to the tmux binary on macOS (e.g. /opt/homebrew/bin/tmux). Leave empty to resolve tmux from PATH."
+        },
+        "tmux-integrated.tmuxPath.linux": {
+          "type": "string",
+          "default": "",
+          "description": "Absolute path to the tmux binary on Linux (e.g. /usr/local/bin/tmux). Leave empty to resolve tmux from PATH."
+        },
+        "tmux-integrated.tmuxPath.windows": {
+          "type": "string",
+          "default": "",
+          "description": "Absolute path to the tmux binary on Windows/WSL (e.g. /usr/bin/tmux). Leave empty to resolve tmux from PATH."
         }
       }
     }
