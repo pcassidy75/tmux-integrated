@@ -32,8 +32,6 @@ import { EventEmitter } from 'events';
 import * as path from 'path';
 
 import { TmuxGateway, CommandFlags } from './tmuxGateway';
-import { tmuxAutomaticRenameIsOn } from './windowTitle';
-
 export type { TmuxPaneOutput, TmuxLayoutChange, TmuxWindowPaneChange } from './tmuxGateway';
 export { CommandFlags } from './tmuxGateway';
 
@@ -56,8 +54,6 @@ export interface TmuxWindow {
     name: string;
     paneId: string;
     active: boolean;
-    /** From `#{automatic-rename}` — when true, tmux (not the user) owns the title. */
-    automaticRename: boolean;
 }
 
 export interface TmuxPaneCursor {
@@ -349,12 +345,6 @@ export class TmuxControlClient extends EventEmitter {
         return (res[0] ?? '').trim();
     }
 
-    /** Whether tmux is auto-renaming this window (`#{automatic-rename}`). Query before turning the option off. */
-    async getWindowAutomaticRename(windowId: string): Promise<boolean> {
-        const res = await this.sendCommand(`display-message -t ${windowId} -p "#{automatic-rename}"`);
-        return tmuxAutomaticRenameIsOn(res[0]);
-    }
-
     /** Zero-based window index (`#{window_index}`) for a window target. */
     async getWindowIndex(windowId: string): Promise<number> {
         const res = await this.sendCommand(`display-message -t ${windowId} -p "#{window_index}"`);
@@ -364,6 +354,12 @@ export class TmuxControlClient extends EventEmitter {
     /** Return the pty path for a pane (e.g. /dev/pts/5). */
     async getPaneTty(paneId: string): Promise<string> {
         const res = await this.sendCommand(`display-message -t ${paneId} -p "#{pane_tty}"`);
+        return (res[0] ?? '').trim();
+    }
+
+    /** Title last set by the program in this pane, including via OSC 0/2. */
+    async getPaneTitle(paneId: string): Promise<string> {
+        const res = await this.sendCommand(`display-message -t ${paneId} -p "#{pane_title}"`);
         return (res[0] ?? '').trim();
     }
 
@@ -398,21 +394,19 @@ export class TmuxControlClient extends EventEmitter {
 
     async listWindows(): Promise<TmuxWindow[]> {
         const res = await this.sendCommand(
-            'list-windows -F "#{window_id}|#{window_index}|#{window_name}|#{pane_id}|#{window_active}|#{automatic-rename}"',
+            'list-windows -F "#{window_id}|#{window_index}|#{window_name}|#{pane_id}|#{window_active}"',
         );
         return res
             .filter((l) => l.trim())
             .map((l) => {
                 const parts = l.split('|');
                 const [id, indexStr, name, paneId, active] = parts;
-                const autoField = parts[5];
                 return {
                     id,
                     index: Number.parseInt(indexStr ?? '0', 10),
                     name,
                     paneId,
                     active: active?.trim() === '1',
-                    automaticRename: parts.length >= 6 ? tmuxAutomaticRenameIsOn(autoField) : true,
                 };
             })
             .filter((w) => Boolean(w.id?.startsWith('@')));

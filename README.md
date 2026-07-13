@@ -139,6 +139,50 @@ restore is largely redundant when this extension is your default profile.
 The extension's Output channel ("tmux-integrated") logs which terminals
 were disposed (or skipped, and why) at each activation.
 
+## Editor-area terminals
+
+By default, tmux-integrated opens terminals in the terminal panel.  You can
+instead open them as **editor tabs** (alongside your code files) — useful when
+you want terminals in the editor grid, pinned alongside files.
+
+```jsonc
+{
+  "tmux-integrated.terminalLocation": "editor",
+  "tmux-integrated.pinTerminals": true
+}
+```
+
+When `terminalLocation` is `"editor"`, VS Code's `TerminalEditorService`
+opens each tmux terminal as an editor tab with `pinned: true` by default.
+The `pinTerminals` setting (default: `true`) additionally fires VS Code's
+`workbench.action.pinEditor` command after each terminal is created as a
+safety net — useful when multiple terminals are restored in quick
+succession during SSH reconnect.
+
+> **Note:** Pinning relies on VS Code's `pinEditor` command, which targets
+> the currently active editor tab.  When multiple terminals are created
+> simultaneously (e.g. auto-connect restoring several tmux windows), the
+> extension focuses each terminal before pinning it, but there may be
+> timing races where the first terminal is pinned correctly and
+> subsequent ones are not.  If you experience this, you can manually pin
+> tabs with **Ctrl+K Shift+Enter** or right-click → Pin.
+
+### Recommended Remote-SSH settings
+
+```jsonc
+{
+  "terminal.integrated.defaultProfile.linux": "tmux-integrated",
+  "tmux-integrated.terminalLocation": "editor",
+  "tmux-integrated.pinTerminals": true,
+  "terminal.integrated.enablePersistentSessions": false
+}
+```
+
+`enablePersistentSessions: false` prevents VS Code's built-in session
+restore from interfering — tmux already handles persistence, and VS Code's
+restore can revive terminals with the wrong profile (see
+[microsoft/vscode#263504](https://github.com/microsoft/vscode/issues/263504)).
+
 ## Release channels
 
 tmux-integrated ships on two channels:
@@ -180,6 +224,10 @@ Every release also attaches a `.vsix` to its
 | `tmux-integrated.shell` | `$SHELL` or `/bin/bash` | Shell to run inside each tmux pane |
 | `tmux-integrated.cwd` | *(workspace folder)* | Starting directory for new tmux terminals. Supports `${workspaceFolder}`. If unset, falls back to `terminal.integrated.cwd`, then the workspace folder. |
 | `tmux-integrated.autoConnect` | `true` | Automatically connect to existing tmux sessions associated with the workspace when VS Code opens. |
+| `tmux-integrated.syncWindowNames` | `bidirectional` | Synchronize tmux window names and VS Code tab names. Options: `bidirectional`, `tmuxToVscode`, `vscodeToTmux`, or `off`. |
+| `tmux-integrated.syncWindowCreation` | `true` | Automatically open a matching VS Code terminal when a window is created externally in tmux. |
+| `tmux-integrated.terminalLocation` | `panel` | Where to open tmux terminal tabs: `panel` (terminal panel) or `editor` (editor area as tabs). |
+| `tmux-integrated.pinTerminals` | `true` | When `terminalLocation` is `editor`, pin terminal tabs via VS Code's `pinEditor` command. |
 
 ## Commands
 
@@ -187,6 +235,19 @@ Every release also attaches a `.vsix` to its
 |---|---|
 | `tmux: New tmux Terminal` | Open a new terminal backed by a new tmux window |
 | `tmux: Attach to tmux Window` | Pick an existing tmux window from the session |
+
+`tmux-integrated.newTerminal` accepts an optional `command` argument for
+keybindings that should launch a program after creating the tmux window:
+
+```jsonc
+{
+  "key": "ctrl+shift+o",
+  "command": "tmux-integrated.newTerminal",
+  "args": {
+    "command": "opencode"
+  }
+}
+```
 
 ## How it works
 

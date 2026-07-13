@@ -87,10 +87,32 @@
           "default": true,
           "description": "Automatically connect to existing tmux sessions associated with the workspace when VS Code opens."
         },
+        "tmux-integrated.syncWindowNames": {
+          "type": "string",
+          "enum": ["bidirectional", "tmuxToVscode", "vscodeToTmux", "off"],
+          "default": "bidirectional",
+          "description": "Control synchronization between tmux window names and VS Code terminal tab names."
+        },
+        "tmux-integrated.syncWindowCreation": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically create a matching VS Code terminal when a window is created externally in the connected tmux session."
+        },
         "tmux-integrated.closeStrayShellsOnActivation": {
           "type": "boolean",
           "default": true,
           "description": "When terminal.integrated.defaultProfile.<os> is set to 'tmux-integrated', automatically dispose any non-tmux shell terminal that the workbench spawned before this extension could register its profile provider. The race is editor-side (see README troubleshooting); the cleanup is purely cosmetic and preserves any tmux-backed tabs."
+        },
+        "tmux-integrated.terminalLocation": {
+          "type": "string",
+          "enum": ["panel", "editor"],
+          "default": "panel",
+          "description": "Where to open tmux terminal tabs. 'editor' opens them as editor tabs, 'panel' opens them in the terminal panel."
+        },
+        "tmux-integrated.pinTerminals": {
+          "type": "boolean",
+          "default": true,
+          "description": "When terminalLocation is 'editor', pin terminal tabs so they are not replaced by new file tabs. Uses VS Code's built-in pinEditor command."
         }
       }
     }
