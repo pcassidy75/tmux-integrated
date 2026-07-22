@@ -3,11 +3,11 @@
  *
  * Lifecycle:
  *   open()        → creates a new tmux window; subscribes to %output events.
-*   handleInput() → forwards key data through tmux control commands.
+ *   handleInput() → forwards key data through tmux control commands.
  *   setDimensions() → updates the control client window size for the tmux
  *                     window shown in this VS Code terminal.
- *   close()       → kills the tmux window (unless VS Code is shutting down,
- *                   in which case the window survives for later re-adoption).
+ *   close()       → removes listeners for this VS Code view while leaving the
+ *                   tmux window alive for later attachment or re-adoption.
  */
 
 import * as vscode from 'vscode';
@@ -144,7 +144,6 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
     private windowId: string | null = null;
     /** tmux window_index for tab labels (`tmux:&lt;n&gt;` when automatic-rename is on). */
     private tabWindowIndex: number | undefined = undefined;
-    private windowClosedByTmux = false;
     private readonly existingWindow: {
         windowId: string;
         paneId: string;
@@ -152,7 +151,6 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
         name?: string;
         automaticRename?: boolean;
     } | null;
-    private readonly isDeactivating: () => boolean;
     private readonly lifecycleHooks: {
         onWindowAttached?: (windowId: string) => void;
         onWindowDetached?: (windowId: string) => void;
@@ -205,11 +203,9 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
             onWindowDetached?: (windowId: string) => void;
             onWindowAttachFailed?: (windowId: string) => void;
         },
-        isDeactivating?: () => boolean,
         log?: (message: string) => void,
     ) {
         this.existingWindow = existingWindow ?? null;
-        this.isDeactivating = isDeactivating ?? (() => false);
         this.lifecycleHooks = lifecycleHooks ?? {};
         this.log = log ?? (() => {});
     }
@@ -332,7 +328,6 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
             // or `tmux kill-window`), close the VS Code terminal tab.
             this.windowCloseListener = (id: string) => {
                 if (id === this.windowId) {
-                    this.windowClosedByTmux = true;
                     this.cleanup();
                     this.closeEmitter.fire(0);
                 }
@@ -363,7 +358,6 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
             // When the entire tmux session exits, close the VS Code tab
             // (mirrors the window-close handler above).
             this.tmuxExitListener = () => {
-                this.windowClosedByTmux = true;
                 this.cleanup();
                 this.closeEmitter.fire(0);
             };
@@ -503,28 +497,9 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
     }
 
     close(): void {
-        // Capture state before cleanup clears listeners.
-        const windowId = this.windowId;
-        const shouldConsiderKill = !this.windowClosedByTmux
-            && !!windowId
-            && this.client.isConnected();
-
+        // Closing the VS Code pseudoterminal only detaches its view. The tmux
+        // window, pane, and foreground process remain alive for re-adoption.
         this.cleanup();
-
-        if (shouldConsiderKill) {
-            // Defer briefly so that VS Code's shutdown path can call
-            // deactivate() and disconnect the client first.  This
-            // prevents killing tmux windows when VS Code exits —
-            // persistence is preserved.
-            const client = this.client;
-            const isDeactivating = this.isDeactivating;
-            setTimeout(() => {
-                if (!isDeactivating() && client.isConnected()) {
-                    client.sendCommand(`kill-window -t ${windowId}`)
-                        .catch(() => {});
-                }
-            }, 300);
-        }
     }
 
     // -----------------------------------------------------------------------

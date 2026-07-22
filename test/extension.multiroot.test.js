@@ -27,6 +27,15 @@ class EventEmitter {
 }
 
 class FakeTmuxControlClient extends events.EventEmitter {
+  static instances = [];
+
+  constructor() {
+    super();
+    this.connected = false;
+    this.disconnectCount = 0;
+    FakeTmuxControlClient.instances.push(this);
+  }
+
   setVersion() {}
 
   versionAtLeast() {
@@ -34,10 +43,17 @@ class FakeTmuxControlClient extends events.EventEmitter {
   }
 
   isConnected() {
-    return true;
+    return this.connected;
   }
 
-  async connect() {}
+  async connect() {
+    this.connected = true;
+  }
+
+  disconnect() {
+    this.disconnectCount += 1;
+    this.connected = false;
+  }
 
   async listWindows() {
     return [{ id: '@1', paneId: '%1', index: 0, name: 'tmux:0', automaticRename: true }];
@@ -134,6 +150,11 @@ test('uses the selected workspace folder as a new tmux terminal cwd', async () =
     const profile = await profileProvider.provideTerminalProfile({ isCancellationRequested: false });
 
     assert.equal(profile.options.pty.startDirectory, '/workspace/Applications');
+    assert.equal(FakeTmuxControlClient.instances.length, 1);
+
+    extension.deactivate();
+    assert.equal(FakeTmuxControlClient.instances[0].disconnectCount, 1,
+      'deactivation must use the safe control-client disconnect path');
   } finally {
     Module._load = originalLoad;
     delete require.cache[require.resolve('../out/extension.js')];
