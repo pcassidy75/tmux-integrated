@@ -180,6 +180,8 @@ Every release also attaches a `.vsix` to its
 | `tmux-integrated.shell` | `$SHELL` or `/bin/bash` | Shell to run inside each tmux pane |
 | `tmux-integrated.cwd` | *(workspace folder)* | Starting directory for new tmux terminals. Supports `${workspaceFolder}`. If unset, falls back to `terminal.integrated.cwd`, then the workspace folder. |
 | `tmux-integrated.autoConnect` | `true` | Automatically connect to existing tmux sessions associated with the workspace when VS Code opens. |
+| `tmux-integrated.showAutomaticRename` | `false` | Show tmux's automatic window name in the tab so the title tracks the foreground process (see *Terminal tab names* below). |
+| `tmux-integrated.closeStrayShellsOnActivation` | `true` | Dispose stray default-shell terminals spawned before activation (see *Stray default-shell tab on launch* above). |
 
 ## Commands
 
@@ -187,6 +189,36 @@ Every release also attaches a `.vsix` to its
 |---|---|
 | `tmux: New tmux Terminal` | Open a new terminal backed by a new tmux window |
 | `tmux: Attach to tmux Window` | Pick an existing tmux window from the session |
+| `tmux: Rename tmux Terminal` | Rename the active terminal's tab and its tmux window together |
+
+## Terminal tab names
+
+Each tab shows the name of its tmux window, and renames stay in sync in both
+directions:
+
+- Rename the tab in VS Code (the built-in **Rename…** action or **tmux:
+  Rename tmux Terminal**) and the tmux window is renamed to match.
+- Rename the window from inside tmux (`tmux rename-window …`) and the tab
+  follows.
+
+By default, windows managed by the extension are pinned to stable
+`tmux:<index>` labels: tmux's *automatic-rename* feature (which retitles the
+window after the foreground process) is turned off so titles don't churn.
+
+If you prefer tabs that track the running program — `vim`, `htop`, `npm`, … —
+like a regular VS Code terminal, enable:
+
+```jsonc
+{
+  "tmux-integrated.showAutomaticRename": true
+}
+```
+
+With this enabled, tmux keeps ownership of the window name and the tab
+follows it. An explicit rename still pins that window's name; run **tmux:
+Rename tmux Terminal** and submit an empty name to hand the title back to
+tmux's automatic naming. The setting applies to terminals created or adopted
+after it is changed (existing tabs pick it up on the next window reload).
 
 ## How it works
 
