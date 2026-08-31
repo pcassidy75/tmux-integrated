@@ -185,12 +185,12 @@ function registerTerminalRenameSync(context: vscode.ExtensionContext): void {
         }
 
         terminalPtyByTerminal.set(terminal, pty);
-        // Detect built-in "Rename…" the instant the user types in this terminal.
+        // Detect built-in "Rename…" the instant the user types in this
+        // terminal. The pty classifies terminal.name itself so that stale
+        // titles (VS Code applying our own rename asynchronously) are never
+        // mistaken for user renames and pushed back to tmux.
         pty.setOnInputCallback(() => {
-            const lastEmitted = pty!.getLastEmittedName();
-            if (lastEmitted !== null && terminal.name !== lastEmitted) {
-                void pty!.syncNameToTmux(terminal.name);
-            }
+            pty!.maybeSyncNameFromVsCode(terminal.name);
         });
         return pty;
     };
@@ -208,6 +208,10 @@ function registerTerminalRenameSync(context: vscode.ExtensionContext): void {
         if (!pty) {
             return;
         }
+
+        // Focus change is a second chance to catch a built-in "Rename…" that
+        // happened while the user never typed in the terminal afterwards.
+        pty.maybeSyncNameFromVsCode(terminal.name);
 
         const windowId = pty.getAttachedTmuxWindowId();
         if (!windowId || windowId === activeTmuxWindowId) {
@@ -352,12 +356,23 @@ function registerCommands(context: vscode.ExtensionContext): void {
                 vscode.window.showWarningMessage('tmux-integrated: active terminal is not a tmux window.');
                 return;
             }
+            // In showAutomaticRename mode an empty name is meaningful: it
+            // hands the title back to tmux's automatic naming.
+            const allowReset = pty.isAutomaticRenameMode();
             const newName = await vscode.window.showInputBox({
-                prompt: 'New tmux window / VS Code tab name',
+                prompt: allowReset
+                    ? 'New tmux window / VS Code tab name (leave empty to return to automatic naming)'
+                    : 'New tmux window / VS Code tab name',
                 value: terminal.name,
-                validateInput: (v) => v.trim() ? null : 'Name cannot be empty',
+                validateInput: allowReset ? undefined : (v) => v.trim() ? null : 'Name cannot be empty',
             });
             if (newName === undefined) { return; }
+            if (!newName.trim()) {
+                if (allowReset) {
+                    await pty.resetToAutomaticRename();
+                }
+                return;
+            }
             await pty.renameWindow(newName);
         }),
     );
@@ -526,12 +541,14 @@ function buildTerminalOptions(
 ): vscode.ExtensionTerminalOptions {
     const cfg = vscode.workspace.getConfiguration('tmux-integrated');
     const shell = (cfg.get<string>('shell') || process.env.SHELL || '/bin/bash') || undefined;
+    const showAutomaticRename = cfg.get<boolean>('showAutomaticRename', false);
 
     const pty = new TmuxTerminal(
         client!,
         startDirectory,
         collectVscodeEnvVars(),
         shell || undefined,
+        showAutomaticRename,
         existingWindow,
         {
             onWindowAttached: (windowId) => {
@@ -547,7 +564,7 @@ function buildTerminalOptions(
     registerPendingTerminalPty(pty);
 
     return {
-        name: existingWindow?.windowIndex !== undefined ? `tmux:${existingWindow.windowIndex}` : 'tmux',
+        name: pty.getInitialTabName(),
         pty,
     };
 }

@@ -58,7 +58,7 @@ a persistent backing store via tmux **control mode** (`tmux -CC`).
 |---|---|
 | `src/extension.ts` | Activation, lifecycle, terminal-profile + command registration, autoConnect, status bar, env-var forwarding, start-directory resolution (incl. the multi-root folder pick). |
 | `src/tmuxTerminalProvider.ts` | The `vscode.Pseudoterminal` (`TmuxTerminal`). Forwards user input to a tmux pane, renders pane output back into xterm.js, and owns the tab name. |
-| `src/windowTitle.ts` | Pure helpers that decide the VS Code tab title from tmux's `#{window_name}` and `#{automatic-rename}`. |
+| `src/windowTitle.ts` | Pure, VS Code-free title logic: `pickTerminalTabTitle` (label policy from `#{window_name}` / `#{automatic-rename}` / the `showAutomaticRename` setting) and `TabTitleSync` (per-terminal rename-sync state: emitted-title history, rename-echo tracking, stale-vs-user-rename classification). |
 | `src/tmuxControlClient.ts` | High-level typed tmux operations (`newWindow`, `listWindows`, `resizeWindowForClient`, …), node-pty resolution (see *Loading node-pty*) and PTY lifecycle, version gating. Wraps `TmuxGateway`. |
 | `src/tmuxGateway.ts` | Low-level control-mode protocol parser. Frames lines, handles `%begin/%end/%error`, manages the pending-command queue, defers writes until `%session-changed`, decodes `%output`/`%extended-output` payloads. |
 
@@ -195,10 +195,10 @@ open(initialDimensions)
   |     * else: client.newWindow(...)  (creation path)
   |-- record windowId, paneId, tabWindowIndex
   |-- subscribe: 'output' / 'window-close' / 'window-renamed' / 'tmux-exit'
-  |-- query #{automatic-rename}, decide tab label (pickTerminalTabTitle)
-  |-- set-option -w automatic-rename off
-  |-- emit initial tab name
-  |-- if (current name in tmux ≠ chosen label) → rename-window
+  |-- determine #{automatic-rename}, decide tab label (pickTerminalTabTitle)
+  |-- unless showAutomaticRename: set-option -w automatic-rename off
+  |-- emit initial tab name (skipped if a %window-renamed already emitted a fresher one)
+  |-- unless showAutomaticRename: if (current name in tmux ≠ chosen label) → rename-window
   |-- resizeWindowForClient(initialDimensions)
   |-- if adoption: capture-pane snapshot + restore cursor position
 ```
@@ -227,27 +227,52 @@ current name is treated as intentional (set by user or by us) and shown
 verbatim.
 
 ```text
-automatic-rename=on  → label = "tmux:<window_index>"
-automatic-rename=off, name non-empty → label = name
-automatic-rename=off, name empty     → label = "tmux:<window_index>"
+automatic-rename=on, showAutomaticRename=false → label = "tmux:<window_index>"
+automatic-rename=on, showAutomaticRename=true  → label = name (fallback "tmux:<n>")
+automatic-rename=off, name non-empty           → label = name
+automatic-rename=off, name empty               → label = "tmux:<window_index>"
 ```
 
-After we settle on a label in `open()`, the extension immediately turns
-automatic-rename off and (if needed) issues `rename-window` so tmux's notion
-of the title matches what VS Code shows.
+In the default mode, after we settle on a label in `open()` the extension
+turns automatic-rename off and (if needed) issues `rename-window` so tmux's
+notion of the title matches what VS Code shows. With the
+`tmux-integrated.showAutomaticRename` setting enabled (issue #40), tmux's
+options are left untouched: the window keeps auto-renaming and every
+`%window-renamed` flows into the tab, so the title tracks the foreground
+process like a regular VS Code terminal. Explicit renames (built-in
+"Rename…" or the `renameTerminal` command) always pin the window
+(`automatic-rename off` + `rename-window`, batched into one PTY write);
+in showAutomaticRename mode the `renameTerminal` command accepts an empty
+name to hand the title back to tmux (`resetToAutomaticRename`).
 
 The bidirectional rename sync works as follows:
 
 * **VS Code → tmux**: a built-in "Rename…" mutates `terminal.name`. The
-  `setOnInputCallback` keystroke probe in `extension.ts` notices the
-  divergence and calls `pty.syncNameToTmux(newName)`.
+  `setOnInputCallback` keystroke probe (plus a probe on terminal-focus
+  change) in `extension.ts` passes `terminal.name` to
+  `pty.maybeSyncNameFromVsCode(...)`.
 * **tmux → VS Code**: `%window-renamed` notifications are processed by
   `windowRenamedListener` and emitted to VS Code via `onDidChangeName`.
 * **Explicit command**: `tmux-integrated.renameTerminal` calls
   `pty.renameWindow(newName)` which atomically updates both sides.
 
-`emitNameIfChanged` deduplicates emissions so the bidirectional loop doesn't
-echo forever.
+All of the state behind this lives in one place per terminal:
+`TabTitleSync` (`windowTitle.ts`). It provides three guarantees:
+
+1. **Stale titles are never synced back to tmux.** `onDidChangeName` is
+   applied asynchronously (two extension-host ↔ renderer hops), so
+   `terminal.name` can lag behind the last emission — for seconds on a slow
+   remote. `classifyTerminalName` only reports `user-rename` for a name this
+   terminal has *never* shown (the creation-options name is seeded as
+   known); anything in the emitted-title history is classified `settling`
+   and ignored. Previously a keystroke in that window pushed the stale name
+   to tmux, reverting a rename that had just been made on the tmux side.
+2. **Echoes of our own `rename-window` commands are recognised.** Every
+   rename sent to tmux is recorded and its `%window-renamed` echo consumed,
+   so two quick successive renames can no longer flicker the tab through the
+   older name when the first echo arrives late.
+3. **Emissions are deduplicated** (`emitTitle`) so the bidirectional loop
+   doesn't echo forever.
 
 ## Protocol layer (`tmuxGateway.ts`)
 
@@ -335,9 +360,26 @@ laggy SSH tunnel.
 * An `initialNameCommitted` guard suppresses the listener until `open()`
   has settled the title. After commit the listener works normally so
   user-initiated `rename-window` from inside tmux still updates the tab.
+  (In showAutomaticRename mode the guard is bypassed — those renames are
+  exactly what the tab should show.)
 * `name` and `automaticRename` are now propagated all the way from
   `listWindows()` into `existingWindow`, so on reconnect we don't need a
   fresh round-trip just to find out what the window is called.
+
+### "My tmux-side rename gets undone when I type in the terminal"
+
+`onDidChangeName` → `terminal.name` is applied asynchronously by the
+workbench, so after a `%window-renamed` the extension host can observe the
+*old* title for a while (longer on high-latency remotes). The keystroke
+probe used to compare `terminal.name` against only the last emitted title
+and pushed any divergence to tmux — i.e. it renamed the window back to the
+stale title. Same story right after adoption, where the creation-options
+name (`tmux:<n>`) is displayed until the real title round-trips.
+
+*Mitigation:* `TabTitleSync` keeps the full set of titles this terminal has
+shown (seeded with the creation-options name) and only treats names outside
+that set as user renames. See *Tab title model* above. Covered by unit,
+integration, and real-tmux e2e tests in `test/`.
 
 ## Things that are intentionally absent
 

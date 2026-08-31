@@ -87,6 +87,11 @@
           "default": true,
           "description": "Automatically connect to existing tmux sessions associated with the workspace when VS Code opens."
         },
+        "tmux-integrated.showAutomaticRename": {
+          "type": "boolean",
+          "default": false,
+          "description": "Show tmux's automatic window name in the terminal tab so the title tracks the foreground process (like a regular VS Code terminal). When disabled (the default), managed windows are pinned to stable 'tmux:<index>'-style labels. Explicit renames (the built-in Rename action or 'Rename tmux Terminal') always pin the name for that window; with this setting enabled, submitting an empty name in 'Rename tmux Terminal' returns the window to automatic naming. Takes effect for terminals created or adopted after the change."
+        },
         "tmux-integrated.closeStrayShellsOnActivation": {
           "type": "boolean",
           "default": true,
