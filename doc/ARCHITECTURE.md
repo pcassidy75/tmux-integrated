@@ -213,10 +213,11 @@ named keys for known sequences, `send-keys -lt` for safe literal runs, and
 `refresh-client -C <cols>,<rows>` (no per-pane resize — see
 `resizeWindowForClient` for the rationale).
 
-`close()` either lets tmux own the lifecycle (when it was tmux that closed
-the window) or, after a 300 ms grace period, sends `kill-window` — but only
-if the extension isn't deactivating. On VS Code shutdown the windows are
-explicitly preserved so they can be re-adopted next launch.
+`close()` cleans up the listeners and bookkeeping for the VS Code view without
+killing its tmux window. The window, pane, and foreground process remain alive
+so the window can be attached or automatically re-adopted later. Conversely,
+the `window-close` and `tmux-exit` listeners close the VS Code tab when tmux
+owns the lifecycle event.
 
 ## Tab title model (`windowTitle.ts`)
 

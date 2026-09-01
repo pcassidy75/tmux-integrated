@@ -9,8 +9,8 @@
  *   4. Registers a "tmux" terminal profile and two commands.
  *
  * Each VS Code terminal tab maps 1:1 to a tmux window (like iTerm2's tmux
- * integration).  Closing a tab kills the corresponding window.  When VS Code
- * exits, the session persists so windows can be re-adopted on next launch.
+ * integration). Closing a tab detaches the VS Code view while the tmux window
+ * persists so it can be attached or re-adopted later.
  */
 
 import * as vscode from 'vscode';
@@ -46,7 +46,6 @@ interface AdoptableWindow {
 }
 let bootstrapWindow: AdoptableWindow | null = null;
 let windowsToAdopt: AdoptableWindow[] = [];
-let disposing = false;
 /**
  * In-flight ensureClientConnected promise.
  *
@@ -94,7 +93,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // Note: we do NOT disconnect from tmux — we want sessions to outlive VS Code.
     context.subscriptions.push({
         dispose: () => {
-            disposing = true;
             terminalPtyByTerminal.clear();
             pendingTerminalPtys.length = 0;
             activeTmuxWindowId = null;
@@ -165,7 +163,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 }
 
 export function deactivate(): void {
-    disposing = true;
     terminalPtyByTerminal.clear();
     pendingTerminalPtys.length = 0;
     activeTmuxWindowId = null;
@@ -558,7 +555,6 @@ function buildTerminalOptions(
                 attachedWindowIds.delete(windowId);
             },
         },
-        () => disposing,
         log,
     );
     registerPendingTerminalPty(pty);
