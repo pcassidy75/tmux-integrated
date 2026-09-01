@@ -775,6 +775,15 @@ export class TmuxTerminal implements vscode.Pseudoterminal {
         // ECMA-48; stripping them never affects rendered output.
         data = data.replace(/\x1b\[[?>=<]?[\d;]*[nc]/g, '');
 
+        // Strip OSC color query responses that xterm.js injects into the PTY
+        // output stream when an app queries terminal colors. Without this they
+        // pass through %output and render as visible garbage (e.g. when bat
+        // queries fg/bg to pick a syntax theme).
+        //   OSC 10 ; rgb:…  ST  — foreground color
+        //   OSC 11 ; rgb:…  ST  — background color
+        // ST is either BEL (\x07) or ESC \ (\x1b\\).
+        data = data.replace(/\x1b\]1[01];[^\x07\x1b]*(?:\x07|\x1b\\)/g, '');
+
         // Ensure bare LF is preceded by CR (xterm.js requirement).
         // Use a single regex pass
         let result : string;
