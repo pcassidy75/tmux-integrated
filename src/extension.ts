@@ -433,12 +433,23 @@ async function ensureClientConnectedImpl(startDirectory: string): Promise<boolea
     } catch (err) {
         log(`tmux not found: ${err}`);
         setStatus('$(error) tmux-integrated: dependency missing');
-        const choice = await vscode.window.showErrorMessage(
-            'tmux-integrated: tmux is not installed or not in PATH.',
-            'Show tmux install instructions',
-        );
-        if (choice) {
-            vscode.env.openExternal(
+        const configured = configuredTmuxPath();
+        const message = configured
+            ? `tmux-integrated: tmux was not found at "${configured}" (tmux-integrated.tmuxPath). ` +
+              'Check the path, or clear the setting to resolve tmux from PATH.'
+            : 'tmux-integrated: tmux is not installed or not in PATH. ' +
+              'If tmux is installed outside the editor\'s PATH (e.g. Homebrew tmux with ' +
+              'VS Code launched from the macOS Dock), set tmux-integrated.tmuxPath to its absolute path.';
+        const openSettings = 'Open Settings';
+        const showInstructions = 'Show tmux install instructions';
+        const choice = await vscode.window.showErrorMessage(message, openSettings, showInstructions);
+        if (choice === openSettings) {
+            void vscode.commands.executeCommand(
+                'workbench.action.openSettings',
+                'tmux-integrated.tmuxPath',
+            );
+        } else if (choice === showInstructions) {
+            void vscode.env.openExternal(
                 vscode.Uri.parse('https://github.com/tmux/tmux/wiki/Installing'),
             );
         }
@@ -765,14 +776,27 @@ function sanitizeName(name: string): string {
     return name.replace(/[^a-zA-Z0-9_-]/g, '_').replace(/^-+/, '').substring(0, 32);
 }
 
+/**
+ * The user-configured tmux binary path (`tmux-integrated.tmuxPath`),
+ * or null when unset so callers fall back to PATH resolution.
+ */
+function configuredTmuxPath(): string | null {
+    const value = vscode.workspace
+        .getConfiguration('tmux-integrated')
+        .get<string>('tmuxPath')
+        ?.trim();
+    return value || null;
+}
+
 function resolveTmuxBinaryPath(): string {
-    // Just use 'tmux' and let the OS resolve it from PATH.
-    // Verify it's actually callable.
-    execFileSync('tmux', ['-V'], {
+    // Prefer the tmuxPath setting; otherwise use 'tmux' and let the OS
+    // resolve it from PATH. Verify the binary is actually callable.
+    const candidate = configuredTmuxPath() ?? 'tmux';
+    execFileSync(candidate, ['-V'], {
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'ignore'],
     });
-    return 'tmux';
+    return candidate;
 }
 
 function log(message: string): void {

@@ -140,6 +140,32 @@ restore is largely redundant when this extension is your default profile.
 The extension's Output channel ("tmux-integrated") logs which terminals
 were disposed (or skipped, and why) at each activation.
 
+### tmux not found when launching from the macOS Dock
+
+When VS Code is launched from the Dock (rather than from a terminal), it
+inherits a minimal `PATH` from launchd that typically does not include
+Homebrew's `/opt/homebrew/bin`. The extension then reports *"tmux is not
+installed or not in PATH"* even though tmux works fine in the integrated
+terminal. Point the extension at the binary directly:
+
+```jsonc
+// settings.json
+{
+  "tmux-integrated.tmuxPath": "/opt/homebrew/bin/tmux"  // Apple Silicon
+  // "tmux-integrated.tmuxPath": "/usr/local/bin/tmux"  // Intel
+}
+```
+
+(`which tmux` in a terminal prints the right path for your machine.)
+
+Alternatively, add Homebrew's `shellenv` to your `~/.zprofile` so GUI-launched
+apps inherit the full PATH:
+
+```sh
+eval "$(/opt/homebrew/bin/brew shellenv)"   # Apple Silicon
+# eval "$(/usr/local/bin/brew shellenv)"    # Intel
+```
+
 ## Release channels
 
 tmux-integrated ships on two channels:
@@ -177,6 +203,7 @@ Every release also attaches a `.vsix` to its
 
 | Setting | Default | Description |
 |---|---|---|
+| `tmux-integrated.tmuxPath` | *(empty — resolve from PATH)* | Path to the tmux executable, e.g. `/opt/homebrew/bin/tmux`. Set this when tmux is installed outside the editor's PATH (see *tmux not found when launching from the macOS Dock* above). |
 | `tmux-integrated.sessionName` | *(workspace folder name)* | Override the tmux session name |
 | `tmux-integrated.shell` | `$SHELL` or `/bin/bash` | Shell to run inside each tmux pane |
 | `tmux-integrated.cwd` | *(workspace folder)* | Starting directory for new tmux terminals. Supports `${workspaceFolder}`. If unset, falls back to `terminal.integrated.cwd`, then the workspace folder. |
