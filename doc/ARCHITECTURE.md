@@ -148,6 +148,33 @@ individual failure reason ("not found" vs. an actual load error such as an
 ABI mismatch) so the output channel pinpoints the problem — this is how
 issue #33 (VS Code 1.129) was diagnosed.
 
+### Windows: control mode over pipes, not ConPTY
+
+On Unix the control client runs inside a node-pty PTY because real tmux
+refuses to start without a tty. On Windows node-pty means **ConPTY**, and
+ConPTY is a terminal emulator rather than a byte pipe: it re-renders the
+child's output, injecting its own cursor/mode escape sequences, dropping the
+`ESC P1000p` DCS opener and wrapping long lines at the PTY width. The
+protocol arrives mangled, the unsolicited `%begin/%end` greeting is never
+recognised, and `connect()` fails with *"Timed out waiting for tmux control
+mode handshake"* even though tmux itself is healthy (seen with psmux).
+
+So on `win32`, `connect()` uses `spawnPipedControlProcess()` instead: a plain
+`child_process.spawn` with stdio pipes, wrapped in the same `IPty` subset
+(`onData`/`onExit`/`write`/`kill`) the rest of the client uses. Native
+Windows tmux implementations such as psmux explicitly support control mode
+on piped stdio (it is how their own docs drive it), and nothing here needs a
+terminal: there is no rendering, and the client size is set with
+`refresh-client -C`, not via the PTY size. stderr is merged into the data
+stream, as a PTY would, and a spawn failure surfaces as an exit rather than
+an uncaught `error` event.
+
+When the handshake does time out, the error includes the first bytes
+tmux sent (or "no output received"), so the output channel shows whether the
+problem is the transport, a non-control-mode error message, or silence. For
+psmux, `~/.psmux/cc_debug.log` is the `psmux -CC` client's own log: every
+line it read from our stdin (`IN`) and relayed from the server (`OUT`).
+
 ## Where new terminal tabs come from
 
 There are three doorways into "create a VS Code terminal tab":

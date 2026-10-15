@@ -67,6 +67,12 @@
     "configuration": {
       "title": "tmux-integrated",
       "properties": {
+        "tmux-integrated.tmuxPath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "Path to the tmux executable (e.g. /opt/homebrew/bin/tmux). Leave empty to resolve 'tmux' from PATH. Useful when the editor is launched with a minimal PATH — such as from the macOS Dock with Homebrew-installed tmux."
+        },
         "tmux-integrated.sessionName": {
           "type": "string",
           "default": "",

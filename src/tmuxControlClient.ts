@@ -28,6 +28,7 @@
  *                       listWindows, …), version gating.
  */
 
+import { spawn as spawnChild } from 'child_process';
 import { EventEmitter } from 'events';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -49,6 +50,82 @@ interface IPty {
     resize(cols: number, rows: number): void;
     kill(signal?: string): void;
     pid: number;
+}
+
+/**
+ * Spawn the control-mode client over plain stdio pipes instead of a PTY,
+ * exposing the same `IPty` subset the rest of the client uses.
+ *
+ * Used on Windows, where node-pty means ConPTY: ConPTY is a terminal
+ * emulator, not a byte pipe — it re-renders the child's output (injecting
+ * cursor/mode escape sequences, dropping the `ESC P1000p` DCS opener,
+ * wrapping long lines at the PTY width), which corrupts the control-mode
+ * protocol so the %begin/%end handshake is never recognised.  Native Windows
+ * tmux implementations (e.g. psmux) accept control mode on piped stdio, so no
+ * terminal is needed.  Real tmux on Unix does require a tty, so this is not
+ * used there.
+ */
+export function spawnPipedControlProcess(
+    file: string,
+    args: string[],
+    cwd: string,
+    env: NodeJS.ProcessEnv,
+): IPty {
+    const child = spawnChild(file, args, {
+        cwd,
+        env,
+        stdio: ['pipe', 'pipe', 'pipe'],
+        windowsHide: true,
+    });
+    const dataListeners: Array<(data: Uint8Array) => void> = [];
+    const exitListeners: Array<(ev: { exitCode: number }) => void> = [];
+    let exited = false;
+    const fireExit = (exitCode: number) => {
+        if (exited) { return; }
+        exited = true;
+        for (const cb of exitListeners) { cb({ exitCode }); }
+    };
+
+    // stderr is merged into the data stream, mirroring what a PTY does, so
+    // any error text tmux prints ends up in the handshake diagnostics.
+    child.stdout?.on('data', (chunk: Buffer) => dataListeners.forEach((cb) => cb(chunk)));
+    child.stderr?.on('data', (chunk: Buffer) => dataListeners.forEach((cb) => cb(chunk)));
+    // Writes racing a dying process raise EPIPE on stdin; the exit path
+    // below reports the disconnect, so just keep the error from escaping.
+    child.stdin?.on('error', () => { /* ignore */ });
+    child.on('error', () => fireExit(-1));
+    child.on('close', (code) => fireExit(code ?? -1));
+
+    const listen = <T>(list: T[], cb: T) => {
+        list.push(cb);
+        return {
+            dispose() {
+                const i = list.indexOf(cb);
+                if (i !== -1) { list.splice(i, 1); }
+            },
+        };
+    };
+
+    return {
+        onData: (cb) => listen(dataListeners, cb),
+        onExit: (cb) => listen(exitListeners, cb),
+        write(data: string) {
+            if (child.stdin && !child.stdin.destroyed) {
+                child.stdin.write(data);
+            }
+        },
+        resize() { /* no terminal to resize */ },
+        kill() { child.kill(); },
+        pid: child.pid ?? -1,
+    };
+}
+
+/** Printable preview of raw control-channel bytes for error messages. */
+function describeRawBytes(bytes: Buffer): string {
+    if (bytes.length === 0) {
+        return 'no output received';
+    }
+    return `first ${bytes.length} byte(s) received: ${JSON.stringify(bytes.toString('latin1'))}`;
 }
 
 type NodePtyModule = {
@@ -287,19 +364,22 @@ export class TmuxControlClient extends EventEmitter {
                 tmuxArgs.push('-c', options.startDirectory);
             }
 
-            const nodePty = this.requireNodePty();
+            const cwd = options?.startDirectory || process.env.HOME || process.cwd();
 
-            this.pty = nodePty.spawn(this.tmuxBinaryPath, tmuxArgs, {
-                name: 'xterm-256color',
-                cols: 220,
-                rows: 50,
-                cwd: options?.startDirectory || process.env.HOME || process.cwd(),
-                env: process.env as Record<string, string>,
-                // Keep the control channel as raw bytes so TmuxGateway can
-                // frame lines and decode %output payloads without losing
-                // UTF-8 characters at tmux notification boundaries.
-                encoding: null,
-            });
+            // Windows: pipes, not ConPTY — see spawnPipedControlProcess().
+            this.pty = process.platform === 'win32'
+                ? spawnPipedControlProcess(this.tmuxBinaryPath, tmuxArgs, cwd, process.env)
+                : this.requireNodePty().spawn(this.tmuxBinaryPath, tmuxArgs, {
+                    name: 'xterm-256color',
+                    cols: 220,
+                    rows: 50,
+                    cwd,
+                    env: process.env as Record<string, string>,
+                    // Keep the control channel as raw bytes so TmuxGateway can
+                    // frame lines and decode %output payloads without losing
+                    // UTF-8 characters at tmux notification boundaries.
+                    encoding: null,
+                });
 
             // Create a fresh gateway for this connection.
             const gw = new TmuxGateway();
@@ -335,8 +415,14 @@ export class TmuxControlClient extends EventEmitter {
                 gw.on(ev, (...args: any[]) => this.emit(ev, ...args));
             }
 
-            // Feed PTY output into the gateway.
+            // Feed PTY output into the gateway, keeping the first bytes so a
+            // handshake timeout can report what tmux actually sent.
+            let handshakeBytes = Buffer.alloc(0);
             this.pty.onData((data: string | Uint8Array) => {
+                if (!this._connected && handshakeBytes.length < 512) {
+                    const chunk = typeof data === 'string' ? Buffer.from(data, 'utf8') : Buffer.from(data);
+                    handshakeBytes = Buffer.concat([handshakeBytes, chunk]).subarray(0, 512);
+                }
                 gw.ingest(data);
             });
 
@@ -385,7 +471,9 @@ export class TmuxControlClient extends EventEmitter {
                 this.removeListener('_ready', onReady);
                 this.removeListener('_ready-error', onReadyError);
                 if (!this._connected) {
-                    reject(new Error('Timed out waiting for tmux control mode handshake'));
+                    reject(new Error(
+                        `Timed out waiting for tmux control mode handshake (${describeRawBytes(handshakeBytes)})`,
+                    ));
                 }
             }, 10_000);
 
